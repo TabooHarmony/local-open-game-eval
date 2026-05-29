@@ -2,15 +2,16 @@
 
 Run [OpenGameEval](https://github.com/Roblox/open-game-eval) evals **locally** against Roblox Studio via MCP. Supports skills injection for benchmarking LLMs with/without context.
 
-A community extension of Roblox's OpenGameEval — same evals, same places, same assertions. Extended with local execution, skills injection, and richer metrics.
+A community extension of Roblox's OpenGameEval, running the same evals, extended with local execution, skills injection, and richer metrics.
 
 ## Quick Start
 
 ### 1. Prerequisites
 
-- **Roblox Studio** installed on Windows
-- **Studio MCP server** enabled (Assistant → Manage MCP Servers)
-- **Python 3.10+**
+- **64-bit Windows 10, or Windows 11.**
+- **Roblox Studio** 
+- **Python 3.10+** https://www.python.org/downloads/
+- **Studio MCP server** enabled (Assistant → Manage MCP Servers) https://create.roblox.com/docs/studio/mcp
 - **An OpenAI-compatible LLM endpoint** (any provider)
 
 ### 2. Clone the Repos
@@ -62,7 +63,7 @@ The harness runs each eval locally against your Studio instance:
 5. Runs `check_scene` (edit mode) and `check_game` (play mode) assertions
 6. Collects metrics: pass/fail, tokens, latency, tool calls, errors
 
-This matches how the cloud API works — the LLM gets tool-calling access to Studio and decides where to place code.
+This matches how the cloud API works, so the LLM gets tool-calling access to Studio and decides where to place code.
 
 ## Skills Injection
 
@@ -184,9 +185,8 @@ return eval
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT; see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-- [Roblox OpenGameEval](https://github.com/Roblox/open-game-eval) — the eval framework this extends
-- [Model Context Protocol](https://modelcontextprotocol.io/) — the bridge between LLMs and Studio
+- [Roblox OpenGameEval](https://github.com/Roblox/open-game-eval): the eval framework this extends
