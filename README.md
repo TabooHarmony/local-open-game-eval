@@ -174,7 +174,6 @@ return eval
 | `LoadedCode` not found | The harness injects it automatically. If this fails, check that `execute_luau` works. |
 | LLM returns errors | Verify `--api-base` and `--api-key`. Test with curl to the `/chat/completions` endpoint. |
 | Play mode hangs | Increase `--startup-wait`. Some evals need more time for play mode to initialize. |
-| 404 from cloud API | This harness runs locally — no cloud API needed. You're in the right place. |
 
 ## Contributing
 
