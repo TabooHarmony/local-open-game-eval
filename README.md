@@ -143,7 +143,7 @@ Evaluations typically take 3-5 minutes each (LLM calls + Studio startup). A pass
 Any OpenAI-compatible endpoint works. Tested with:
 
 - **MiMo v2.5 Pro** (via Xiaomi API)
-- **DeepSeek V4 Flash** (via OpenRouter)
+- **DeepSeek V4 Flash** (via DeepSeek API)
 - **GLM-5.1** (via OpenCode Go)
 - Any model behind an OpenAI-compatible proxy
 
