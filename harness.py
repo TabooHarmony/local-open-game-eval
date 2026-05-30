@@ -439,7 +439,7 @@ def parse_args():
     p.add_argument("--studio-exe", required=True, help="Path to RobloxStudioBeta.exe")
     p.add_argument("--mcp-bat", required=True, help="Path to mcp.bat")
     p.add_argument("--model-name", required=True, help="Model name for API")
-    p.add_argument("--api-base", required=True, help="OpenAI-compatible API base URL")
+    p.add_argument("--api-base", default=None, help="OpenAI-compatible API base URL (or set LLM_API_BASE env)")
     p.add_argument("--api-key", default=None, help="API key (or set LLM_API_KEY env)")
     p.add_argument("--system-prompt-file", default=None, help="File with system prompt for skills injection")
     p.add_argument("--pass-n", type=int, default=1, choices=[1, 5], help="Pass@1 or Pass@5")
@@ -459,6 +459,12 @@ async def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    # Resolve API base
+    api_base = args.api_base or os.getenv("LLM_API_BASE")
+    if not api_base:
+        print("Error: --api-base or LLM_API_BASE env required")
+        sys.exit(1)
+
     # Resolve API key
     api_key = args.api_key or os.getenv("LLM_API_KEY")
     if not api_key:
@@ -473,7 +479,7 @@ async def main():
 
     model = ModelConfig(
         name=args.model_name,
-        api_base=args.api_base.rstrip("/"),
+        api_base=api_base.rstrip("/"),
         api_key=api_key,
         system_prompt=system_prompt,
     )

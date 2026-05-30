@@ -46,9 +46,10 @@ python harness.py ^
   --places-dir ..\open-game-eval\Places ^
   --studio-exe "C:\Users\YOU\AppData\Local\Roblox\Versions\version-xxx\RobloxStudioBeta.exe" ^
   --mcp-bat "%LOCALAPPDATA%\Roblox\mcp.bat" ^
-  --model-name "your-model-name" ^
-  --api-base "https://your-endpoint/v1"
+  --model-name "your-model-name"
 ```
+
+API base and key are read from `.env` by default. Override on the CLI with `--api-base` and `--api-key`.
 
 Results saved to `results/results.json`.
 
@@ -88,9 +89,9 @@ Required:
   --studio-exe PATH        Path to RobloxStudioBeta.exe
   --mcp-bat PATH           Path to mcp.bat
   --model-name NAME        Model name for API
-  --api-base URL           OpenAI-compatible API base URL
 
 Optional:
+  --api-base URL           OpenAI-compatible API base URL (or set LLM_API_BASE in .env)
   --api-key KEY            API key (or set LLM_API_KEY in .env)
   --system-prompt-file F   System prompt file for skills injection
   --pass-n 1|5             Pass@1 or Pass@5 (default: 1)
@@ -172,7 +173,7 @@ return eval
 | Studio doesn't open | Verify `--studio-exe` path. Test with `.\RobloxStudioBeta.exe -localPlaceFile "path.rbxl"` manually. |
 | MCP connection fails | Ensure Studio MCP is enabled. Check `%LOCALAPPDATA%\Roblox\mcp.bat` exists. |
 | `LoadedCode` not found | The harness injects it automatically. If this fails, check that `execute_luau` works. |
-| LLM returns errors | Verify `--api-base` and `--api-key`. Test with curl to the `/chat/completions` endpoint. |
+| LLM returns errors | Verify `LLM_API_BASE` and `LLM_API_KEY` in `.env` (or `--api-base` and `--api-key`). Test with curl to the `/chat/completions` endpoint. |
 | Play mode hangs | Increase `--startup-wait`. Some evals need more time for play mode to initialize. |
 
 ## Contributing
