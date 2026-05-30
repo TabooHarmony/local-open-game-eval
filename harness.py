@@ -107,6 +107,8 @@ class EvalMetrics:
     scenario: str = ""
     place: str = ""
     passed: bool = False
+    passed_cons: bool = False   # Cons@5: >=3/5 passes
+    passed_all: bool = False    # All@5: 5/5 passes
     scene_passed: Optional[bool] = None
     game_passed: Optional[bool] = None
     error: Optional[str] = None
@@ -406,14 +408,14 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
 # Aggregation
 # ──────────────────────────────────────────────
 
-def aggregate_results(results: list[EvalMetrics]) -> dict:
+def aggregate_results(results: list[EvalMetrics], pass_n: int = 1) -> dict:
     total = len(results)
     passed = sum(1 for r in results if r.passed)
     errors = sum(1 for r in results if r.error and "Fatal" in (r.error or ""))
     tool_errors = sum(r.tool_errors for r in results)
     total_tool_calls = sum(r.tool_calls for r in results)
 
-    return {
+    summary = {
         "total_evals": total,
         "passed": passed,
         "pass_rate": round(passed / total * 100, 2) if total else 0,
@@ -427,6 +429,13 @@ def aggregate_results(results: list[EvalMetrics]) -> dict:
         "total_time_ms": sum(r.total_time_ms for r in results),
     }
 
+    if pass_n == 5:
+        summary["pass_at_5"] = round(passed / total * 100, 2) if total else 0  # >=1/5
+        summary["cons_at_5"] = round(sum(1 for r in results if r.passed_cons) / total * 100, 2) if total else 0  # >=3/5
+        summary["all_at_5"] = round(sum(1 for r in results if r.passed_all) / total * 100, 2) if total else 0  # 5/5
+
+    return summary
+
 
 # ──────────────────────────────────────────────
 # CLI
@@ -435,6 +444,7 @@ def aggregate_results(results: list[EvalMetrics]) -> dict:
 def parse_args():
     p = argparse.ArgumentParser(description="OpenGameEval Local Harness")
     p.add_argument("--evals-dir", required=True, help="Path to Evals/ directory")
+    p.add_argument("--debug-evals-dir", default=None, help="Path to DebugEvals/ directory (optional, for debug benchmark)")
     p.add_argument("--places-dir", required=True, help="Path to Places/ directory")
     p.add_argument("--studio-exe", required=True, help="Path to RobloxStudioBeta.exe")
     p.add_argument("--mcp-bat", required=True, help="Path to mcp.bat")
@@ -516,59 +526,94 @@ async def main():
     # Create output dir
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Run evals
-    all_results = []
-    for i, ev in enumerate(evals):
-        logger.info(f"=== [{i+1}/{len(evals)}] {ev.scenario_name} ===")
+    # Helper: run a set of evals
+    async def run_eval_set(evals_list, label):
+        results = []
+        for i, ev in enumerate(evals_list):
+            logger.info(f"=== [{label}] [{i+1}/{len(evals_list)}] {ev.scenario_name} ===")
 
-        run_results = []
-        for attempt in range(run.pass_n):
-            logger.info(f"  Attempt {attempt + 1}/{run.pass_n}")
-            result = await run_single_eval(ev, model, studio, run)
-            run_results.append(result)
+            run_results = []
+            for attempt in range(run.pass_n):
+                logger.info(f"  Attempt {attempt + 1}/{run.pass_n}")
+                result = await run_single_eval(ev, model, studio, run)
+                run_results.append(result)
 
-            status = "PASS" if result.passed else "FAIL"
-            logger.info(
-                f"  {status} | tokens_in={result.total_tokens_in} "
-                f"tokens_out={result.total_tokens_out} "
-                f"latency={result.llm_latency_ms}ms "
-                f"total={result.total_time_ms}ms "
-                f"tools={result.tool_calls} err={result.tool_errors}"
-            )
-            if result.error:
-                logger.info(f"  Error: {result.error}")
+                status = "PASS" if result.passed else "FAIL"
+                logger.info(
+                    f"  {status} | tokens_in={result.total_tokens_in} "
+                    f"tokens_out={result.total_tokens_out} "
+                    f"latency={result.llm_latency_ms}ms "
+                    f"total={result.total_time_ms}ms "
+                    f"tools={result.tool_calls} err={result.tool_errors}"
+                )
+                if result.error:
+                    logger.info(f"  Error: {result.error}")
 
-        # For pass@5, compute consistency metrics
-        if run.pass_n == 5:
-            pass_count = sum(1 for r in run_results if r.passed)
-            best = run_results[0]  # representative
-            best.passed = pass_count >= 1  # pass@5
-            best.passed_cons = pass_count >= 3  # cons@5
-            best.passed_all = pass_count == 5  # all@5
-            all_results.append(best)
-        else:
-            all_results.append(run_results[0])
+            if run.pass_n == 5:
+                pass_count = sum(1 for r in run_results if r.passed)
+                best = run_results[0]
+                best.passed = pass_count >= 1
+                best.passed_cons = pass_count >= 3
+                best.passed_all = pass_count == 5
+                results.append(best)
+            else:
+                results.append(run_results[0])
+        return results
+
+    # Run expanded evals
+    all_results = await run_eval_set(evals, "EXPANDED")
+
+    # Optionally run debug evals
+    debug_results = None
+    if args.debug_evals_dir:
+        debug_dir = Path(args.debug_evals_dir)
+        debug_files = sorted(debug_dir.glob("*.lua"))
+        if debug_files:
+            debug_evals = [parse_eval(str(f)) for f in debug_files]
+            if args.eval_filter:
+                pattern = re.compile(args.eval_filter)
+                debug_evals = [e for e in debug_evals if pattern.search(e.scenario_name)]
+            logger.info(f"Loaded {len(debug_evals)} debug evals")
+            debug_results = await run_eval_set(debug_evals, "DEBUG")
 
     # Save results
     results_path = Path(args.output_dir) / "results.json"
-    summary = aggregate_results(all_results)
+    summary = aggregate_results(all_results, run.pass_n)
     output = {
         "summary": summary,
         "model": {"name": model.name, "api_base": model.api_base},
         "config": {"pass_n": run.pass_n, "max_rounds": run.max_tool_rounds},
         "evals": [asdict(r) for r in all_results],
     }
+
+    debug_summary = None
+    if debug_results:
+        debug_summary = aggregate_results(debug_results, run.pass_n)
+        output["debug_summary"] = debug_summary
+        output["debug_evals"] = [asdict(r) for r in debug_results]
+
     results_path.write_text(json.dumps(output, indent=2))
     logger.info(f"Results saved to {results_path}")
 
     # Print summary
+    def print_summary(label, summ, pass_n):
+        print(f"\n  [{label}]")
+        if pass_n == 5:
+            print(f"    Pass@1: {summ['pass_rate']}% ({summ['passed']}/{summ['total_evals']})")
+            print(f"    Pass@5: {summ['pass_at_5']}%")
+            print(f"    Cons@5: {summ['cons_at_5']}%")
+            print(f"    All@5:  {summ['all_at_5']}%")
+        else:
+            print(f"    PASS RATE: {summ['pass_rate']}% ({summ['passed']}/{summ['total_evals']})")
+        print(f"    AVG TOKENS: in={summ['avg_tokens_in']} out={summ['avg_tokens_out']}")
+        print(f"    AVG LATENCY: {summ['avg_latency_ms']}ms")
+        print(f"    TOOL ERROR RATE: {summ['tool_error_rate']}%")
+
     print("\n" + "=" * 60)
     print(f"  MODEL: {model.name}")
-    print(f"  PASS RATE: {summary['pass_rate']}% ({summary['passed']}/{summary['total_evals']})")
-    print(f"  AVG TOKENS: in={summary['avg_tokens_in']} out={summary['avg_tokens_out']}")
-    print(f"  AVG LATENCY: {summary['avg_latency_ms']}ms")
-    print(f"  AVG TIME/EVAL: {summary['avg_total_time_ms']}ms")
-    print(f"  TOOL ERROR RATE: {summary['tool_error_rate']}%")
+    print_summary("EXPANDED (87 evals)", summary, run.pass_n)
+    if debug_summary:
+        print_summary("DEBUG (30 evals)", debug_summary, run.pass_n)
     print("=" * 60)
 
 
