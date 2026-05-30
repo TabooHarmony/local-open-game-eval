@@ -204,31 +204,167 @@ def kill_studio(proc: subprocess.Popen):
 # Eval Runner
 # ──────────────────────────────────────────────
 
-# Lua code to ensure LoadedCode + EvalUtils exist (eval scripts require them)
-ENSURE_LOADED_CODE = """
-if not game:FindFirstChild("LoadedCode") then
-    local mc = Instance.new("ModuleScript")
-    mc.Name = "LoadedCode"
-    mc.Source = "return {}"
-    mc.Parent = game
+# EvalUtils module implementations (reverse-engineered from eval script usage)
+# These are injected as ModuleScripts inside LoadedCode.EvalUtils
+
+EVALUTILS_TYPES = """
+-- Type stubs for eval scripts (BaseEval type annotation)
+return {
+    BaseEval = {},  -- placeholder; type annotations are ignored at runtime
+}
+"""
+
+EVALUTILS_UTILS_HE = """
+local utils_he = {}
+
+-- Returns all non-service instances in the game as an array (snapshot)
+function utils_he.getAllReasonableItems()
+    local items = {}
+    for _, obj in ipairs(game:GetDescendants()) do
+        local ok, isService = pcall(function()
+            return game:GetService(obj.ClassName) ~= nil
+        end)
+        if not (ok and isService) then
+            table.insert(items, obj)
+        end
+    end
+    return items
 end
+
+-- Returns items in 'new' that are not in 'old' (set difference by instance identity)
+function utils_he.table_difference(old, new)
+    local oldSet = {}
+    for _, obj in ipairs(old) do
+        oldSet[obj] = true
+    end
+    local diff = {}
+    for _, obj in ipairs(new) do
+        if not oldSet[obj] then
+            table.insert(diff, obj)
+        end
+    end
+    return diff
+end
+
+-- Returns selected instances from a selection context table
+function utils_he.GetSelected(selectionContext)
+    local selected = {}
+    for _, selection in ipairs(selectionContext) do
+        for _, instance in ipairs(game:GetDescendants()) do
+            if instance.Name == selection.instanceName and instance:IsA(selection.className) then
+                table.insert(selected, instance)
+                break
+            end
+        end
+    end
+    return selected
+end
+
+-- Returns bounding box size info for a model
+function utils_he.getSizeInfoOfModel(model)
+    local cf, size = model:GetBoundingBox()
+    local sx, sy, sz = size.X, size.Y, size.Z
+    local shortest = math.min(sx, sy, sz)
+    local longest = math.max(sx, sy, sz)
+    return {
+        shortestSide = shortest,
+        longestSide = longest,
+        size = size,
+        cframe = cf,
+    }
+end
+
+return utils_he
+"""
+
+EVALUTILS_UTILS_RUNS = """
+local utils_runs = {}
+
+-- Simulates a key press/release in play mode
+function utils_runs.sendKeyEvent(pressed, keyCode)
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    if pressed then
+        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    else
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end
+end
+
+-- Creates PlayerScripts in StarterPlayer if missing
+function utils_runs.createPlayerScripts()
+    local StarterPlayer = game:GetService("StarterPlayer")
+    if not StarterPlayer:FindFirstChild("StarterPlayerScripts") then
+        local sps = Instance.new("Folder")
+        sps.Name = "StarterPlayerScripts"
+        sps.Parent = StarterPlayer
+    end
+end
+
+-- Loads/reloads player scripts (no-op in edit mode)
+function utils_runs.loadPlayerScripts()
+    -- This is a no-op in edit mode; only relevant during playtest
+end
+
+return utils_runs
+"""
+
+EVALUTILS_LIB = """
+-- General library stub (not used by any eval at runtime)
+return {}
+"""
+
+# Lua code to inject EvalUtils modules into LoadedCode
+INJECT_EVALUTILS = """
 local LoadedCode = game:FindFirstChild("LoadedCode")
-if not LoadedCode:FindFirstChild("EvalUtils") then
-    local eu = Instance.new("Folder")
+if not LoadedCode then
+    LoadedCode = Instance.new("ModuleScript")
+    LoadedCode.Name = "LoadedCode"
+    LoadedCode.Source = "return {}"
+    LoadedCode.Parent = game
+end
+
+local eu = LoadedCode:FindFirstChild("EvalUtils")
+if not eu then
+    eu = Instance.new("Folder")
     eu.Name = "EvalUtils"
     eu.Parent = LoadedCode
-    -- Create stub modules that eval scripts require()
-    for _, name in ipairs({"types", "utils_he", "utils_runs", "lib"}) do
-        if not eu:FindFirstChild(name) then
-            local mod = Instance.new("ModuleScript")
-            mod.Name = name
-            mod.Source = "return {}"
-            mod.Parent = eu
-        end
+end
+
+local modules = {TYPES_PLACEHOLDER}
+
+for name, source in pairs(modules) do
+    local existing = eu:FindFirstChild(name)
+    if existing then
+        existing.Source = source
+    else
+        local mod = Instance.new("ModuleScript")
+        mod.Name = name
+        mod.Source = source
+        mod.Parent = eu
     end
 end
 return "ok"
 """
+
+# Build the injection Lua with actual module sources
+def _build_inject_lua():
+    import json
+    modules = {
+        "types": EVALUTILS_TYPES,
+        "utils_he": EVALUTILS_UTILS_HE,
+        "utils_runs": EVALUTILS_UTILS_RUNS,
+        "lib": EVALUTILS_LIB,
+    }
+    # Serialize as Lua table
+    parts = []
+    for name, source in modules.items():
+        # Escape source for Lua string
+        escaped = source.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+        parts.append(f'["{name}"] = "{escaped}"')
+    lua_table = "{" + ", ".join(parts) + "}"
+    return INJECT_EVALUTILS.replace("TYPES_PLACEHOLDER", lua_table)
+
+ENSURE_LOADED_CODE = _build_inject_lua()
 
 def get_tool_text(result) -> str:
     """Extract text from MCP tool result, handling different content types."""
