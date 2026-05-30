@@ -204,13 +204,28 @@ def kill_studio(proc: subprocess.Popen):
 # Eval Runner
 # ──────────────────────────────────────────────
 
-# Lua code to ensure LoadedCode exists (eval scripts require it)
+# Lua code to ensure LoadedCode + EvalUtils exist (eval scripts require them)
 ENSURE_LOADED_CODE = """
 if not game:FindFirstChild("LoadedCode") then
     local mc = Instance.new("ModuleScript")
     mc.Name = "LoadedCode"
     mc.Source = "return {}"
     mc.Parent = game
+end
+local LoadedCode = game:FindFirstChild("LoadedCode")
+if not LoadedCode:FindFirstChild("EvalUtils") then
+    local eu = Instance.new("Folder")
+    eu.Name = "EvalUtils"
+    eu.Parent = LoadedCode
+    -- Create stub modules that eval scripts require()
+    for _, name in ipairs({"types", "utils_he", "utils_runs", "lib"}) do
+        if not eu:FindFirstChild(name) then
+            local mod = Instance.new("ModuleScript")
+            mod.Name = name
+            mod.Source = "return {}"
+            mod.Parent = eu
+        end
+    end
 end
 return "ok"
 """
