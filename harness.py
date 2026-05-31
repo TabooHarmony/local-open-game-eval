@@ -431,21 +431,21 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                 # 10. Enter play mode and run check_game
                 if not m.error or m.scene_passed:
                     try:
-                        # Store eval source in a StringValue (readable from Luau in play mode)
-                        store_eval_lua = f"""
+                        await session.call_tool("start_stop_play", {"is_start": True})
+                        await asyncio.sleep(8)  # wait for play mode to initialize
+
+                        # Re-inject LoadedCode + EvalUtils (play mode resets DataModel)
+                        await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
+
+                        # Re-inject eval source after play mode starts
+                        inject_eval_source = f"""
 local sv = Instance.new("StringValue")
 sv.Name = "_HarnessEval"
 sv.Value = [==[{ev.script}]==]
 sv.Parent = game
 return "ok"
 """
-                        await session.call_tool("execute_luau", {"code": store_eval_lua})
-
-                        await session.call_tool("start_stop_play", {"is_start": True})
-                        await asyncio.sleep(8)  # wait for play mode to initialize
-
-                        # Re-inject LoadedCode + EvalUtils (play mode may reset DataModel)
-                        await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
+                        await session.call_tool("execute_luau", {"code": inject_eval_source})
 
                         check_game_lua = """
 local sv = game:FindFirstChild("_HarnessEval")
