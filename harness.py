@@ -429,8 +429,6 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                     m.error = f"check_scene failed: {scene_text}"
 
                 # 10. Enter play mode and run check_game
-                # NOTE: loadstring() is disabled in Roblox play mode.
-                # We attempt check_game but treat loadstring failures as SKIP, not FAIL.
                 if not m.error or m.scene_passed:
                     try:
                         await session.call_tool("start_stop_play", {"is_start": True})
@@ -439,30 +437,41 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                         # Re-inject LoadedCode + EvalUtils (play mode resets DataModel)
                         await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
 
-                        # Re-inject eval source after play mode starts
-                        inject_eval_source = f"""
-local sv = Instance.new("StringValue")
-sv.Name = "_HarnessEval"
-sv.Value = [==[{ev.script}]==]
-sv.Parent = game
+                        # Store eval as ModuleScript (edit-mode creation persists into play)
+                        store_eval_mc = f"""
+local mc = Instance.new("ModuleScript")
+mc.Name = "_HarnessEval"
+mc.Source = [==[{ev.script}]==]
+mc.Parent = game
 return "ok"
 """
-                        await session.call_tool("execute_luau", {"code": inject_eval_source})
+                        await session.call_tool("execute_luau", {"code": store_eval_mc})
 
-                        check_game_lua = """
-local sv = game:FindFirstChild("_HarnessEval")
-if not sv then return "false|NO_EVAL_SOURCE" end
-local ok, eval = pcall(function()
-    return loadstring(sv.Value)()
-end)
-if not ok then
-    local err = tostring(eval)
-    if err:find("loadstring") then
-        return "skip|LOADSTRING_UNAVAILABLE"
-    end
-    return "false|PARSE_ERROR: " .. err
+                        # Diagnostic: check what's available in play mode
+                        diag_result = await session.call_tool("execute_luau", {"code": """
+local results = {}
+results.loadstring = type(loadstring)
+results.require = type(require)
+local mc = game:FindFirstChild("_HarnessEval")
+results.mc_found = mc ~= nil
+if mc then
+    local ok, val = pcall(require, mc)
+    results.require_ok = ok
+    results.require_type = type(val)
+    if not ok then results.require_err = tostring(val) end
 end
-if not eval.check_game then return "true|NO_CHECK" end
+return game:GetService("HttpService"):JSONEncode(results)
+"""})
+                        diag_text = get_tool_text(diag_result)
+                        logger.info(f"  play mode diag: {diag_text}")
+
+                        # Try require() on the ModuleScript first (no loadstring needed)
+                        check_game_lua = """
+local mc = game:FindFirstChild("_HarnessEval")
+if not mc then return "false|NO_EVAL_MODULE" end
+local ok, eval = pcall(require, mc)
+if not ok then return "false|REQUIRE_ERROR: " .. tostring(eval) end
+if type(eval) ~= "table" then return "false|EVAL_NOT_TABLE: " .. type(eval) end
 if not eval.check_game then return "true|NO_CHECK" end
 local cok, cerr = pcall(eval.check_game)
 if cok then return "true|pass" else return "false|" .. tostring(cerr) end
@@ -470,9 +479,8 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                         game_result = await session.call_tool("execute_luau", {"code": check_game_lua})
                         game_text = get_tool_text(game_result) or "false|no_response"
                         if game_text.startswith("skip"):
-                            # loadstring unavailable in play mode — check_game skipped
-                            m.game_passed = None  # skipped, not failed
-                            logger.info(f"  check_game skipped (loadstring unavailable in play mode)")
+                            m.game_passed = None
+                            logger.info(f"  check_game skipped")
                         else:
                             m.game_passed = game_text.startswith("true")
                             if not m.game_passed:
