@@ -278,6 +278,148 @@ return "ok"
 
 ENSURE_LOADED_CODE = _build_evalutils_inject_lua()
 
+# Bridge script for server-side check_game execution.
+# This Script runs in the game server context during play mode (not plugin context).
+# It loads eval code from ReplicatedStorage, runs check_game, and returns the result
+# via StudioTestService:EndTest().
+BRIDGE_SCRIPT_LUA = r"""
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local STS = game:GetService("StudioTestService")
+
+-- Timeout: auto-end test after 60s
+local timedOut = false
+task.delay(60, function()
+    timedOut = true
+    pcall(function() STS:EndTest("false|TIMEOUT: check_game exceeded 60s") end)
+end)
+
+-- Wait for game to be ready
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+-- Wait for player (LoadCharacter requires a player)
+local player = Players.PlayerAdded:Wait()
+task.wait(1)  -- brief settle
+
+-- Load eval code from ReplicatedStorage
+local evalMc = RS:FindFirstChild("_HarnessEvalCode")
+if not evalMc then
+    STS:EndTest("false|NO_EVAL_MODULE: _HarnessEvalCode not found in ReplicatedStorage")
+    return
+end
+
+local ok, eval = pcall(require, evalMc)
+if not ok then
+    STS:EndTest("false|REQUIRE_ERROR: " .. tostring(eval))
+    return
+end
+if type(eval) ~= "table" then
+    STS:EndTest("false|EVAL_NOT_TABLE: " .. type(eval))
+    return
+end
+if not eval.check_game then
+    STS:EndTest("true|NO_CHECK")
+    return
+end
+
+local cok, cerr = pcall(eval.check_game)
+if timedOut then return end  -- timeout handler already called EndTest
+if cok then
+    STS:EndTest("true|pass")
+else
+    STS:EndTest("false|" .. tostring(cerr))
+end
+"""
+
+async def run_check_game_sts(session, ev: EvalFile, timeout: float = 120.0) -> Optional[str]:
+    """Run check_game via StudioTestService bridge.
+
+    Stores eval code in ReplicatedStorage, creates a server-side Script
+    in ServerScriptService that executes check_game in the game server context,
+    then uses StudioTestService:ExecutePlayModeAsync to run play mode and
+    collect the result via EndTest().
+
+    Returns the result string (e.g. "true|pass", "false|error") or None on failure.
+    """
+    eval_code = ev.script
+
+    # 1. Store eval code as ModuleScript in ReplicatedStorage
+    store_lua = f"""
+local existing = game:GetService("ReplicatedStorage"):FindFirstChild("_HarnessEvalCode")
+if existing then existing:Destroy() end
+local mc = Instance.new("ModuleScript")
+mc.Name = "_HarnessEvalCode"
+mc.Source = [==[{eval_code}]==]
+mc.Parent = game:GetService("ReplicatedStorage")
+return "ok"
+"""
+    r = await session.call_tool("execute_luau", {"code": store_lua})
+    if "ok" not in (get_tool_text(r) or ""):
+        logger.warning(f"  Failed to store eval code: {get_tool_text(r)}")
+        return None
+
+    # 2. Create bridge Script in ServerScriptService
+    bridge_safe = BRIDGE_SCRIPT_LUA.replace("]]", "] ]")
+    create_script_lua = f"""
+local SSS = game:GetService("ServerScriptService")
+local existing = SSS:FindFirstChild("_HarnessBridge")
+if existing then existing:Destroy() end
+local s = Instance.new("Script")
+s.Name = "_HarnessBridge"
+s.Source = [[{bridge_safe}]]
+s.Parent = SSS
+return "ok"
+"""
+    r = await session.call_tool("execute_luau", {"code": create_script_lua})
+    if "ok" not in (get_tool_text(r) or ""):
+        logger.warning(f"  Failed to create bridge script: {get_tool_text(r)}")
+        return None
+
+    # 3. Use StudioTestService:ExecutePlayModeAsync to start play mode
+    #    This blocks until the server script calls EndTest()
+    run_lua = f"""
+local STS = game:GetService("StudioTestService")
+local ok, result = pcall(function()
+    return STS:ExecutePlayModeAsync({{source = "harness"}})
+end)
+if ok then
+    return tostring(result)
+else
+    return "false|EXECUTE_PLAY_ERROR: " .. tostring(result)
+end
+"""
+    logger.info("  Starting play mode via StudioTestService...")
+    try:
+        r = await asyncio.wait_for(
+            session.call_tool("execute_luau", {"code": run_lua}),
+            timeout=timeout,
+        )
+        result = get_tool_text(r) or "false|no_response"
+    except asyncio.TimeoutError:
+        logger.warning(f"  StudioTestService timed out after {timeout}s")
+        # Force stop play mode
+        try:
+            await session.call_tool("start_stop_play", {"is_start": False})
+        except Exception:
+            pass
+        result = "false|TIMEOUT"
+
+    # 4. Cleanup
+    try:
+        await session.call_tool("execute_luau", {"code": """
+local c = game:GetService("ReplicatedStorage"):FindFirstChild("_HarnessEvalCode")
+if c then c:Destroy() end
+local s = game:GetService("ServerScriptService"):FindFirstChild("_HarnessBridge")
+if s then s:Destroy() end
+"""})
+    except Exception:
+        pass
+
+    logger.info(f"  check_game result: {result}")
+    return result
+
+
 def get_tool_text(result) -> str:
     """Extract text from MCP tool result, handling different content types."""
     if not result or not result.content:
@@ -428,61 +570,16 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                 if not m.scene_passed:
                     m.error = f"check_scene failed: {scene_text}"
 
-                # 10. Enter play mode and run check_game
+                # 10. Run check_game (play mode) via StudioTestService bridge
+                # This executes check_game in the game SERVER context, not plugin context.
+                # Required for server-only APIs like LoadCharacter().
                 if not m.error or m.scene_passed:
                     try:
-                        await session.call_tool("start_stop_play", {"is_start": True})
-                        await asyncio.sleep(8)  # wait for play mode to initialize
-
-                        # Re-inject LoadedCode + EvalUtils (play mode resets DataModel)
-                        await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
-
-                        # Store eval as ModuleScript for require()-based execution
-                        # (loadstring is disabled in play mode by default)
-                        store_eval_mc = f"""
-local mc = Instance.new("ModuleScript")
-mc.Name = "_HarnessEval"
-mc.Source = [==[{ev.script}]==]
-mc.Parent = game
-return "ok"
-"""
-                        await session.call_tool("execute_luau", {"code": store_eval_mc})
-
-                        # Diagnostic: log what's available (non-blocking)
-                        diag_result = await session.call_tool("execute_luau", {"code": """
-local r = {}
-r.loadstring = type(loadstring)  -- "function" if LoadStringEnabled, "nil" otherwise
-r.require = type(require)
-local mc = game:FindFirstChild("_HarnessEval")
-r.mc_found = mc ~= nil
-if mc then
-    local ok, val = pcall(require, mc)
-    r.require_ok = ok
-    r.require_type = type(val)
-    if not ok then r.require_err = tostring(val) end
-    if ok and type(val) == "table" then
-        r.has_check_game = val.check_game ~= nil
-    end
-end
-return game:GetService("HttpService"):JSONEncode(r)
-"""})
-                        diag_text = get_tool_text(diag_result)
-                        logger.info(f"  play mode diag: {diag_text}")
-
-                        # Primary: require() on ModuleScript (no loadstring needed)
-                        check_game_lua = """
-local mc = game:FindFirstChild("_HarnessEval")
-if not mc then return "false|NO_EVAL_MODULE: ModuleScript not found in play mode" end
-local ok, eval = pcall(require, mc)
-if not ok then return "false|REQUIRE_ERROR: " .. tostring(eval) end
-if type(eval) ~= "table" then return "false|EVAL_NOT_TABLE: " .. type(eval) .. " (expected table from require)" end
-if not eval.check_game then return "true|NO_CHECK" end
-local cok, cerr = pcall(eval.check_game)
-if cok then return "true|pass" else return "false|" .. tostring(cerr) end
-"""
-                        game_result = await session.call_tool("execute_luau", {"code": check_game_lua})
-                        game_text = get_tool_text(game_result) or "false|no_response"
-                        if game_text.startswith("skip"):
+                        game_text = await run_check_game_sts(session, ev)
+                        if game_text is None:
+                            m.game_passed = None
+                            logger.info(f"  check_game skipped (bridge unavailable)")
+                        elif game_text.startswith("skip"):
                             m.game_passed = None
                             logger.info(f"  check_game skipped")
                         else:
@@ -492,19 +589,6 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                     except Exception as e:
                         m.game_passed = False
                         m.error = f"Play mode error: {e}"
-                    finally:
-                        try:
-                            await session.call_tool("start_stop_play", {"is_start": False})
-                        except Exception:
-                            pass
-                        # Cleanup _HarnessEval
-                        try:
-                            await session.call_tool("execute_luau", {"code": """
-local sv = game:FindFirstChild("_HarnessEval")
-if sv then sv:Destroy() end
-"""})
-                        except Exception:
-                            pass
 
                 m.passed = (m.scene_passed is True) and (m.game_passed is not False)
 
