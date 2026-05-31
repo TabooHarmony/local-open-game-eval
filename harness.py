@@ -497,7 +497,10 @@ return "ok"
                     except Exception:
                         pass
 
-                # 9. Run check_scene (edit mode)
+                # 9. Re-inject LoadedCode + EvalUtils (LLM may have wiped them)
+                await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
+
+                # 10. Run check_scene (edit mode)
                 check_scene_lua = f"""
 local ok, eval = pcall(function()
     return loadstring([==[{ev.script}]==])()
@@ -518,6 +521,9 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                     try:
                         await session.call_tool("start_stop_play", {"action": "start_play"})
                         await asyncio.sleep(8)  # wait for play mode to initialize
+
+                        # Re-inject LoadedCode + EvalUtils (play mode may reset DataModel)
+                        await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
 
                         check_game_lua = f"""
 local ok, eval = pcall(function()
