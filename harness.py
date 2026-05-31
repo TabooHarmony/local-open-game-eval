@@ -437,7 +437,8 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                         # Re-inject LoadedCode + EvalUtils (play mode resets DataModel)
                         await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
 
-                        # Store eval as ModuleScript (edit-mode creation persists into play)
+                        # Store eval as ModuleScript for require()-based execution
+                        # (loadstring is disabled in play mode by default)
                         store_eval_mc = f"""
 local mc = Instance.new("ModuleScript")
 mc.Name = "_HarnessEval"
@@ -447,31 +448,34 @@ return "ok"
 """
                         await session.call_tool("execute_luau", {"code": store_eval_mc})
 
-                        # Diagnostic: check what's available in play mode
+                        # Diagnostic: log what's available (non-blocking)
                         diag_result = await session.call_tool("execute_luau", {"code": """
-local results = {}
-results.loadstring = type(loadstring)
-results.require = type(require)
+local r = {}
+r.loadstring = type(loadstring)  -- "function" if LoadStringEnabled, "nil" otherwise
+r.require = type(require)
 local mc = game:FindFirstChild("_HarnessEval")
-results.mc_found = mc ~= nil
+r.mc_found = mc ~= nil
 if mc then
     local ok, val = pcall(require, mc)
-    results.require_ok = ok
-    results.require_type = type(val)
-    if not ok then results.require_err = tostring(val) end
+    r.require_ok = ok
+    r.require_type = type(val)
+    if not ok then r.require_err = tostring(val) end
+    if ok and type(val) == "table" then
+        r.has_check_game = val.check_game ~= nil
+    end
 end
-return game:GetService("HttpService"):JSONEncode(results)
+return game:GetService("HttpService"):JSONEncode(r)
 """})
                         diag_text = get_tool_text(diag_result)
                         logger.info(f"  play mode diag: {diag_text}")
 
-                        # Try require() on the ModuleScript first (no loadstring needed)
+                        # Primary: require() on ModuleScript (no loadstring needed)
                         check_game_lua = """
 local mc = game:FindFirstChild("_HarnessEval")
-if not mc then return "false|NO_EVAL_MODULE" end
+if not mc then return "false|NO_EVAL_MODULE: ModuleScript not found in play mode" end
 local ok, eval = pcall(require, mc)
 if not ok then return "false|REQUIRE_ERROR: " .. tostring(eval) end
-if type(eval) ~= "table" then return "false|EVAL_NOT_TABLE: " .. type(eval) end
+if type(eval) ~= "table" then return "false|EVAL_NOT_TABLE: " .. type(eval) .. " (expected table from require)" end
 if not eval.check_game then return "true|NO_CHECK" end
 local cok, cerr = pcall(eval.check_game)
 if cok then return "true|pass" else return "false|" .. tostring(cerr) end
