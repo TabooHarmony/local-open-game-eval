@@ -429,6 +429,8 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                     m.error = f"check_scene failed: {scene_text}"
 
                 # 10. Enter play mode and run check_game
+                # NOTE: loadstring() is disabled in Roblox play mode.
+                # We attempt check_game but treat loadstring failures as SKIP, not FAIL.
                 if not m.error or m.scene_passed:
                     try:
                         await session.call_tool("start_stop_play", {"is_start": True})
@@ -453,16 +455,28 @@ if not sv then return "false|NO_EVAL_SOURCE" end
 local ok, eval = pcall(function()
     return loadstring(sv.Value)()
 end)
-if not ok then return "false|PARSE_ERROR: " .. tostring(eval) end
+if not ok then
+    local err = tostring(eval)
+    if err:find("loadstring") then
+        return "skip|LOADSTRING_UNAVAILABLE"
+    end
+    return "false|PARSE_ERROR: " .. err
+end
+if not eval.check_game then return "true|NO_CHECK" end
 if not eval.check_game then return "true|NO_CHECK" end
 local cok, cerr = pcall(eval.check_game)
 if cok then return "true|pass" else return "false|" .. tostring(cerr) end
 """
                         game_result = await session.call_tool("execute_luau", {"code": check_game_lua})
                         game_text = get_tool_text(game_result) or "false|no_response"
-                        m.game_passed = game_text.startswith("true")
-                        if not m.game_passed:
-                            m.error = f"check_game failed: {game_text}"
+                        if game_text.startswith("skip"):
+                            # loadstring unavailable in play mode — check_game skipped
+                            m.game_passed = None  # skipped, not failed
+                            logger.info(f"  check_game skipped (loadstring unavailable in play mode)")
+                        else:
+                            m.game_passed = game_text.startswith("true")
+                            if not m.game_passed:
+                                m.error = f"check_game failed: {game_text}"
                     except Exception as e:
                         m.game_passed = False
                         m.error = f"Play mode error: {e}"
