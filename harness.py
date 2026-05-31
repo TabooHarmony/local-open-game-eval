@@ -431,12 +431,12 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                 # 10. Enter play mode and run check_game
                 if not m.error or m.scene_passed:
                     try:
-                        # Store eval as ModuleScript for play mode (loadstring unavailable)
+                        # Store eval source in a StringValue (readable from Luau in play mode)
                         store_eval_lua = f"""
-local mc = Instance.new("ModuleScript")
-mc.Name = "_HarnessEval"
-mc.Source = [==[{ev.script}]==]
-mc.Parent = game
+local sv = Instance.new("StringValue")
+sv.Name = "_HarnessEval"
+sv.Value = [==[{ev.script}]==]
+sv.Parent = game
 return "ok"
 """
                         await session.call_tool("execute_luau", {"code": store_eval_lua})
@@ -448,10 +448,10 @@ return "ok"
                         await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
 
                         check_game_lua = """
+local sv = game:FindFirstChild("_HarnessEval")
+if not sv then return "false|NO_EVAL_SOURCE" end
 local ok, eval = pcall(function()
-    local mc = game:FindFirstChild("_HarnessEval")
-    if not mc then return nil end
-    return require(mc)()
+    return loadstring(sv.Value)()
 end)
 if not ok then return "false|PARSE_ERROR: " .. tostring(eval) end
 if not eval.check_game then return "true|NO_CHECK" end
@@ -474,8 +474,8 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                         # Cleanup _HarnessEval
                         try:
                             await session.call_tool("execute_luau", {"code": """
-local mc = game:FindFirstChild("_HarnessEval")
-if mc then mc:Destroy() end
+local sv = game:FindFirstChild("_HarnessEval")
+if sv then sv:Destroy() end
 """})
                         except Exception:
                             pass
