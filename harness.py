@@ -148,8 +148,9 @@ async def llm_chat(
     messages: list,
     tools: list,
     timeout: int = 120,
+    max_retries: int = 3,
 ) -> dict:
-    """Call an OpenAI-compatible chat completions endpoint."""
+    """Call an OpenAI-compatible chat completions endpoint with retry."""
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config.api_key}",
@@ -162,17 +163,31 @@ async def llm_chat(
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{config.api_base}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=timeout),
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                raise RuntimeError(f"LLM API error {resp.status}: {body[:500]}")
-            return await resp.json()
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{config.api_base}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(
+                        total=timeout,
+                        connect=15,
+                        sock_read=timeout,
+                    ),
+                ) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        raise RuntimeError(f"LLM API error {resp.status}: {body[:500]}")
+                    return await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError) as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt
+                logger.warning(f"LLM call failed (attempt {attempt+1}/{max_retries}): {e}. Retrying in {wait}s...")
+                await asyncio.sleep(wait)
+    raise last_error or RuntimeError("LLM call failed after all retries")
 
 
 # ──────────────────────────────────────────────
