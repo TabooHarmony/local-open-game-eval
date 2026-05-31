@@ -294,11 +294,10 @@ task.delay(60, function()
     pcall(function() STS:EndTest("false|TIMEOUT: check_game exceeded 60s") end)
 end)
 
--- Wait for game to be ready
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-print("[bridge] game loaded")
+-- Wait for game to be ready (non-blocking)
+print("[bridge] script started")
+task.wait(2)  -- brief settle instead of blocking game.Loaded:Wait()
+print("[bridge] after settle")
 
 -- Wait for player — try multiple methods
 local player = nil
