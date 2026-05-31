@@ -298,9 +298,48 @@ end)
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
--- Wait for player (LoadCharacter requires a player)
-local player = Players.PlayerAdded:Wait()
-task.wait(1)  -- brief settle
+print("[bridge] game loaded")
+
+-- Wait for player — try multiple methods
+local player = nil
+if #Players:GetPlayers() > 0 then
+    player = Players:GetPlayers()[1]
+else
+    print("[bridge] waiting for player...")
+    local conn
+    conn = Players.PlayerAdded:Connect(function(p)
+        player = p
+        if conn then conn:Disconnect() end
+    end)
+    -- Also check if a player sneaked in between the check and connect
+    if #Players:GetPlayers() > 0 then
+        player = Players:GetPlayers()[1]
+        if conn then conn:Disconnect() end
+    end
+    if not player then
+        -- Wait up to 10s for a player
+        for i = 1, 20 do
+            task.wait(0.5)
+            if player then break end
+            if #Players:GetPlayers() > 0 then
+                player = Players:GetPlayers()[1]
+                break
+            end
+        end
+    end
+    if conn then pcall(function() conn:Disconnect() end) end
+end
+
+if not player then
+    print("[bridge] ERROR: no player after 10s")
+    STS:EndTest("false|NO_PLAYER: no player joined within 10s")
+    return
+end
+print("[bridge] player: " .. player.Name)
+
+-- Brief settle for character
+task.wait(2)
+print("[bridge] loading eval code...")
 
 -- Load eval code from ReplicatedStorage
 local evalMc = RS:FindFirstChild("_HarnessEvalCode")
@@ -311,6 +350,7 @@ end
 
 local ok, eval = pcall(require, evalMc)
 if not ok then
+    print("[bridge] require error: " .. tostring(eval))
     STS:EndTest("false|REQUIRE_ERROR: " .. tostring(eval))
     return
 end
@@ -319,15 +359,19 @@ if type(eval) ~= "table" then
     return
 end
 if not eval.check_game then
+    print("[bridge] no check_game function, skipping")
     STS:EndTest("true|NO_CHECK")
     return
 end
 
+print("[bridge] running check_game...")
 local cok, cerr = pcall(eval.check_game)
 if timedOut then return end  -- timeout handler already called EndTest
 if cok then
+    print("[bridge] check_game PASSED")
     STS:EndTest("true|pass")
 else
+    print("[bridge] check_game FAILED: " .. tostring(cerr))
     STS:EndTest("false|" .. tostring(cerr))
 end
 """
@@ -404,6 +448,17 @@ end
         except Exception:
             pass
         result = "false|TIMEOUT"
+
+    # Capture bridge debug output from Studio console
+    try:
+        console = await session.call_tool("console_output", {})
+        console_text = get_tool_text(console) or ""
+        # Extract bridge lines
+        for line in console_text.split("\n"):
+            if "[bridge]" in line:
+                logger.info(f"  {line.strip()}")
+    except Exception:
+        pass
 
     # 4. Cleanup
     try:
