@@ -413,11 +413,19 @@ local s = Instance.new("Script")
 s.Name = "_HarnessBridge"
 s.Source = [[{bridge_safe}]]
 s.Parent = SSS
-return "ok"
+-- Verify it was created
+local check = SSS:FindFirstChild("_HarnessBridge")
+if check then
+    return "ok|source_len=" .. #check.Source
+else
+    return "error|script not found after creation"
+end
 """
     r = await session.call_tool("execute_luau", {"code": create_script_lua})
-    if "ok" not in (get_tool_text(r) or ""):
-        logger.warning(f"  Failed to create bridge script: {get_tool_text(r)}")
+    bridge_status = get_tool_text(r) or ""
+    logger.info(f"  bridge script: {bridge_status}")
+    if "ok" not in bridge_status:
+        logger.warning(f"  Failed to create bridge script: {bridge_status}")
         return None
 
     # 3. Use StudioTestService:ExecutePlayModeAsync to start play mode
