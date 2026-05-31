@@ -416,7 +416,7 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                 # 10. Enter play mode and run check_game
                 if not m.error or m.scene_passed:
                     try:
-                        await session.call_tool("start_stop_play", {"action": "start_play"})
+                        await session.call_tool("start_stop_play", {"is_start": True})
                         await asyncio.sleep(8)  # wait for play mode to initialize
 
                         # Re-inject LoadedCode + EvalUtils (play mode may reset DataModel)
@@ -441,7 +441,7 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                         m.error = f"Play mode error: {e}"
                     finally:
                         try:
-                            await session.call_tool("start_stop_play", {"action": "stop"})
+                            await session.call_tool("start_stop_play", {"is_start": False})
                         except Exception:
                             pass
 
