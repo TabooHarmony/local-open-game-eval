@@ -128,6 +128,9 @@ class EvalMetrics:
     screenshot_path: Optional[str] = None
     error_category: str = ""
     retried: bool = False
+    tools_used: list = field(default_factory=list)  # unique tool names called
+    edit_count: int = 0      # multi_edit + script-creating execute_luau calls
+    max_context_tokens: int = 0  # peak prompt_tokens in final LLM round
 
 
 # ──────────────────────────────────────────────
@@ -627,6 +630,7 @@ return "ok"
                     usage = response.get("usage", {})
                     m.total_tokens_in += usage.get("prompt_tokens", 0)
                     m.total_tokens_out += usage.get("completion_tokens", 0)
+                    m.max_context_tokens = max(m.max_context_tokens, usage.get("prompt_tokens", 0))
 
                     choice = response["choices"][0]
                     message = choice["message"]
@@ -637,10 +641,21 @@ return "ok"
                         for tc in message["tool_calls"]:
                             m.tool_calls += 1
                             func = tc["function"]
+                            tool_name = func["name"]
+                            if tool_name not in m.tools_used:
+                                m.tools_used.append(tool_name)
+                            # Count edit operations
+                            if tool_name in ("multi_edit", "script_edit"):
+                                m.edit_count += 1
                             try:
                                 args = json.loads(func["arguments"])
                             except json.JSONDecodeError:
                                 args = {}
+                            # execute_luau that creates/modifies scripts counts as edit
+                            if tool_name == "execute_luau":
+                                code = args.get("code", "")
+                                if "Instance.new" in code or ".Source" in code or "multi_edit" in code:
+                                    m.edit_count += 1
 
                             try:
                                 result = await session.call_tool(func["name"], args)
@@ -805,6 +820,8 @@ def aggregate_results(results: list[EvalMetrics], pass_n: int = 1) -> dict:
         "avg_latency_ms": round(sum(r.llm_latency_ms for r in results) / total) if total else 0,
         "avg_total_time_ms": round(sum(r.total_time_ms for r in results) / total) if total else 0,
         "total_time_ms": sum(r.total_time_ms for r in results),
+        "avg_edit_count": round(sum(r.edit_count for r in results) / total, 1) if total else 0,
+        "avg_max_context_tokens": round(sum(r.max_context_tokens for r in results) / total) if total else 0,
         "error_breakdown": error_breakdown,
     }
 
@@ -977,6 +994,7 @@ async def main():
                     f"latency={result.llm_latency_ms}ms "
                     f"total={result.total_time_ms}ms "
                     f"tools={result.tool_calls} err={result.tool_errors} "
+                    f"edits={result.edit_count} ctx={result.max_context_tokens} "
                     f"cat={result.error_category}"
                 )
                 if result.error:
@@ -1039,6 +1057,7 @@ async def main():
         else:
             print(f"    PASS RATE: {summ['pass_rate']}% ({summ['passed']}/{summ['total_evals']})")
         print(f"    AVG ROUNDS: {summ['avg_llm_calls']}  AVG TOKENS: in={summ['avg_tokens_in']} out={summ['avg_tokens_out']}")
+        print(f"    AVG EDITS: {summ['avg_edit_count']}  AVG PEAK CTX: {summ['avg_max_context_tokens']} tokens")
         print(f"    AVG LATENCY: {summ['avg_latency_ms']}ms")
         print(f"    TOOL ERROR RATE: {summ['tool_error_rate']}%")
         # Error breakdown
