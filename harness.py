@@ -226,6 +226,9 @@ _MODEL_PRICING = {
     "claude-3.5-sonnet": (3.00, 15.00),
     "claude-sonnet-4": (3.00, 15.00),
     "claude-opus-4": (15.00, 75.00),
+    "mimo": (0.0, 0.0),  # free tier / included in Ollama Pro
+    "deepseek": (0.14, 0.28),
+    "gemini": (1.25, 10.00),
 }
 
 
@@ -233,10 +236,10 @@ def estimate_cost(model_name: str, tokens_in: int, tokens_out: int) -> float:
     """Estimate USD cost for a model call based on token counts.
 
     For known models, uses their published pricing.
-    Default: GPT-4 class pricing ($3/1M input, $15/1M output).
+    Default: $1/1M input, $3/1M output (conservative generic estimate).
     """
     name_lower = model_name.lower()
-    input_rate, output_rate = 3.0, 15.0  # default GPT-4 class
+    input_rate, output_rate = 1.0, 3.0  # conservative default
     for key, (inp, out) in _MODEL_PRICING.items():
         if key in name_lower:
             input_rate, output_rate = inp, out
@@ -260,7 +263,13 @@ def categorize_error(error_text: str) -> str:
         return "timeout"
     if "TOOL ERROR" in err:
         return "transient_error"
-    if any(kw in error_text for kw in ["is not", "expected", "should be"]):
+    # Eval assertion failures = model didn't accomplish the task
+    if "CHECK_SCENE FAILED" in err or "CHECK_GAME FAILED" in err:
+        return "model_fail"
+    if any(kw in error_text for kw in ["is not", "isn't", "expected", "should be",
+                                        "not properly", "hasn't", "has not been",
+                                        "was not", "wasn't", "did not", "didn't",
+                                        "missing", "incorrect"]):
         return "model_fail"
     if any(kw in err for kw in ["CONNECTION", "NETWORK", "ECONNRESET", "ECONNREFUSED",
                                   "ETIMEDOUT", "SOCKET", "DNS", "SSL", "CERTIFICATE",
@@ -687,35 +696,37 @@ return "ok"
                 if run.screenshots:
                     try:
                         ss = await session.call_tool("screen_capture", {})
-                        if ss.content:
-                            # Extract base64 data from the tool result
-                            ss_text = get_tool_text(ss)
-                            # Try to find base64 data in the text
-                            img_data = None
-                            if ss_text:
-                                # The text might be the base64 itself, or contain it
-                                # Strip any prefix like "data:image/png;base64,"
-                                clean = ss_text.strip()
-                                if "," in clean and clean.startswith("data:"):
-                                    clean = clean.split(",", 1)[1]
-                                try:
-                                    img_data = base64.b64decode(clean)
-                                except Exception:
-                                    pass
-                            if img_data is None and hasattr(ss, 'content'):
-                                # Try extracting from content blocks
-                                for c in ss.content:
-                                    if hasattr(c, 'data'):
+                        img_data = None
+                        if ss and ss.content:
+                            for c in ss.content:
+                                # MCP ImageContent has .data (base64) and .mimeType
+                                if hasattr(c, 'data') and c.data:
+                                    try:
                                         img_data = base64.b64decode(c.data)
                                         break
-                            if img_data is not None:
-                                ss_dir = Path(run.run_dir) / "screenshots"
-                                ss_dir.mkdir(parents=True, exist_ok=True)
-                                ss_path = ss_dir / f"{ev.scenario_name}.png"
-                                ss_path.write_bytes(img_data)
-                                m.screenshot_path = str(ss_path)
-                    except Exception:
-                        pass
+                                    except Exception:
+                                        pass
+                                # MCP TextContent might contain base64 or data URI
+                                if hasattr(c, 'text') and c.text:
+                                    clean = c.text.strip()
+                                    if clean.startswith("data:"):
+                                        clean = clean.split(",", 1)[1] if "," in clean else clean
+                                    try:
+                                        img_data = base64.b64decode(clean)
+                                        break
+                                    except Exception:
+                                        pass
+                        if img_data and len(img_data) > 100:  # sanity check
+                            ss_dir = Path(run.run_dir) / "screenshots"
+                            ss_dir.mkdir(parents=True, exist_ok=True)
+                            ss_path = ss_dir / f"{ev.scenario_name}.png"
+                            ss_path.write_bytes(img_data)
+                            m.screenshot_path = str(ss_path)
+                            logger.debug(f"  Screenshot saved: {ss_path}")
+                        else:
+                            logger.debug(f"  Screenshot: no image data in response")
+                    except Exception as e:
+                        logger.debug(f"  Screenshot failed: {e}")
 
                 # 9. Re-inject LoadedCode + EvalUtils (LLM may have wiped them)
                 await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
