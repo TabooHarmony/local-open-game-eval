@@ -127,7 +127,6 @@ class EvalMetrics:
     rounds_used: int = 0
     screenshot_path: Optional[str] = None
     error_category: str = ""
-    cost_usd: float = 0.0
     retried: bool = False
 
 
@@ -665,7 +664,7 @@ return "ok"
                 # 8. Take screenshot if requested
                 if run.screenshots:
                     try:
-                        ss = await session.call_tool("screen_capture", {})
+                        ss = await session.call_tool("screen_capture", {"capture_id": ev.scenario_name})
                         img_data = None
                         if ss and ss.content:
                             for c in ss.content:
@@ -752,9 +751,6 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
     if m.error and not m.error_category:
         m.error_category = categorize_error(m.error)
 
-    # Estimate token cost
-    m.cost_usd = 0.0  # user calculates cost externally
-
     return m
 
 
@@ -776,7 +772,6 @@ async def run_single_eval(
         m.error = "Eval timed out"
         m.error_category = "timeout"
         m.total_time_ms = run.eval_timeout * 1000
-        m.cost_usd = 0.0  # user calculates cost externally
         logger.error(f"[{ev.scenario_name}] Eval timed out after {run.eval_timeout}s")
         return m
 
@@ -798,8 +793,6 @@ def aggregate_results(results: list[EvalMetrics], pass_n: int = 1) -> dict:
         cat = r.error_category or "none"
         error_breakdown[cat] = error_breakdown.get(cat, 0) + 1
 
-    total_cost = sum(r.cost_usd for r in results)
-
     summary = {
         "total_evals": total,
         "passed": passed,
@@ -812,8 +805,6 @@ def aggregate_results(results: list[EvalMetrics], pass_n: int = 1) -> dict:
         "avg_latency_ms": round(sum(r.llm_latency_ms for r in results) / total) if total else 0,
         "avg_total_time_ms": round(sum(r.total_time_ms for r in results) / total) if total else 0,
         "total_time_ms": sum(r.total_time_ms for r in results),
-        "token_cost_usd": round(total_cost, 4),
-        "avg_cost_usd": round(total_cost / total, 4) if total else 0,
         "error_breakdown": error_breakdown,
     }
 
@@ -986,7 +977,7 @@ async def main():
                     f"latency={result.llm_latency_ms}ms "
                     f"total={result.total_time_ms}ms "
                     f"tools={result.tool_calls} err={result.tool_errors} "
-                    f"cost=${result.cost_usd:.4f} cat={result.error_category}"
+                    f"cat={result.error_category}"
                 )
                 if result.error:
                     logger.info(f"  Error: {result.error}")
@@ -1047,10 +1038,9 @@ async def main():
             print(f"    All@5:  {summ['all_at_5']}%")
         else:
             print(f"    PASS RATE: {summ['pass_rate']}% ({summ['passed']}/{summ['total_evals']})")
-        print(f"    AVG TOKENS: in={summ['avg_tokens_in']} out={summ['avg_tokens_out']}")
+        print(f"    AVG ROUNDS: {summ['avg_llm_calls']}  AVG TOKENS: in={summ['avg_tokens_in']} out={summ['avg_tokens_out']}")
         print(f"    AVG LATENCY: {summ['avg_latency_ms']}ms")
         print(f"    TOOL ERROR RATE: {summ['tool_error_rate']}%")
-        print(f"    AVG COST: ${summ['avg_cost_usd']:.4f} per eval, ${summ['token_cost_usd']:.4f} total")
         # Error breakdown
         err_bd = summ.get("error_breakdown", {})
         non_none_errors = {k: v for k, v in err_bd.items() if k != "none"}
