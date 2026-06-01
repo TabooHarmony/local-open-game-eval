@@ -13,6 +13,8 @@ Supports skills injection for benchmarking LLMs with/without context.
 """
 
 import asyncio
+import base64
+import hashlib
 import json
 import time
 import os
@@ -21,6 +23,7 @@ import subprocess
 import sys
 import argparse
 import logging
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -63,6 +66,8 @@ class RunConfig:
     output_dir: str = "results"
     screenshots: bool = False
     verbose: bool = False
+    eval_timeout: int = 300
+    run_dir: str = ""
 
 
 # ──────────────────────────────────────────────
@@ -121,6 +126,9 @@ class EvalMetrics:
     total_time_ms: int = 0
     rounds_used: int = 0
     screenshot_path: Optional[str] = None
+    error_category: str = ""
+    cost_usd: float = 0.0
+    retried: bool = False
 
 
 # ──────────────────────────────────────────────
@@ -148,9 +156,13 @@ async def llm_chat(
     messages: list,
     tools: list,
     timeout: int = 120,
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> dict:
-    """Call an OpenAI-compatible chat completions endpoint with retry."""
+    """Call an OpenAI-compatible chat completions endpoint with retry.
+
+    Uses exponential backoff: 2s, 4s, 8s, 16s, 32s.
+    Better error unwrapping for ExceptionGroup/TaskGroup errors.
+    """
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config.api_key}",
@@ -183,11 +195,78 @@ async def llm_chat(
                     return await resp.json()
         except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError) as e:
             last_error = e
+            # Better error unwrapping for ExceptionGroup / TaskGroup
+            err_msg = str(e)
+            if hasattr(e, 'exceptions') and e.exceptions:
+                # ExceptionGroup: extract first sub-exception
+                err_msg = str(e.exceptions[0])
             if attempt < max_retries - 1:
-                wait = 2 ** attempt
-                logger.warning(f"LLM call failed (attempt {attempt+1}/{max_retries}): {e}. Retrying in {wait}s...")
+                wait = 2 ** (attempt + 1)  # 2s, 4s, 8s, 16s, 32s
+                logger.warning(f"LLM call failed (attempt {attempt+1}/{max_retries}): {err_msg}. Retrying in {wait}s...")
                 await asyncio.sleep(wait)
+            else:
+                logger.error(f"LLM call failed (attempt {attempt+1}/{max_retries}): {err_msg}")
     raise last_error or RuntimeError("LLM call failed after all retries")
+
+
+# ──────────────────────────────────────────────
+# Token Cost Estimation
+# ──────────────────────────────────────────────
+
+# Known model pricing (per 1M tokens)
+_MODEL_PRICING = {
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4-turbo": (10.00, 30.00),
+    "gpt-4": (30.00, 60.00),
+    "gpt-3.5-turbo": (0.50, 1.50),
+    "claude-3-opus": (15.00, 75.00),
+    "claude-3-sonnet": (3.00, 15.00),
+    "claude-3-haiku": (0.25, 1.25),
+    "claude-3.5-sonnet": (3.00, 15.00),
+    "claude-sonnet-4": (3.00, 15.00),
+    "claude-opus-4": (15.00, 75.00),
+}
+
+
+def estimate_cost(model_name: str, tokens_in: int, tokens_out: int) -> float:
+    """Estimate USD cost for a model call based on token counts.
+
+    For known models, uses their published pricing.
+    Default: GPT-4 class pricing ($3/1M input, $15/1M output).
+    """
+    name_lower = model_name.lower()
+    input_rate, output_rate = 3.0, 15.0  # default GPT-4 class
+    for key, (inp, out) in _MODEL_PRICING.items():
+        if key in name_lower:
+            input_rate, output_rate = inp, out
+            break
+    return (tokens_in / 1_000_000 * input_rate) + (tokens_out / 1_000_000 * output_rate)
+
+
+# ──────────────────────────────────────────────
+# Error Categorization
+# ──────────────────────────────────────────────
+
+def categorize_error(error_text: str) -> str:
+    """Categorize an error message into a standard category.
+
+    Returns one of: "model_fail", "timeout", "transient_error", "harness_error"
+    """
+    if not error_text:
+        return ""
+    err = error_text.upper()
+    if "TIMEOUT" in err:
+        return "timeout"
+    if "TOOL ERROR" in err:
+        return "transient_error"
+    if any(kw in error_text for kw in ["is not", "expected", "should be"]):
+        return "model_fail"
+    if any(kw in err for kw in ["CONNECTION", "NETWORK", "ECONNRESET", "ECONNREFUSED",
+                                  "ETIMEDOUT", "SOCKET", "DNS", "SSL", "CERTIFICATE",
+                                  "BROKEN PIPE", "REMOTE DISCONNECT"]):
+        return "transient_error"
+    return "harness_error"
 
 
 # ──────────────────────────────────────────────
@@ -492,18 +571,20 @@ def get_tool_text(result) -> str:
     return str(result.content[0])
 
 
-async def run_single_eval(
+async def _run_single_eval_inner(
     ev: EvalFile,
     model: ModelConfig,
     studio: StudioConfig,
     run: RunConfig,
 ) -> EvalMetrics:
+    """Inner eval logic, called by run_single_eval with timeout wrapping."""
     m = EvalMetrics(scenario=ev.scenario_name, place=ev.place)
     t0 = time.time()
 
     place_path = Path(run.places_dir) / ev.place
     if not place_path.exists():
         m.error = f"Place file not found: {place_path}"
+        m.error_category = "harness_error"
         m.total_time_ms = int((time.time() - t0) * 1000)
         return m
 
@@ -547,6 +628,7 @@ return "ok"
                 setup_text = get_tool_text(setup_result)
                 if "SETUP_ERROR" in setup_text:
                     m.error = f"Setup failed: {setup_text}"
+                    m.error_category = "harness_error"
                     m.total_time_ms = int((time.time() - t0) * 1000)
                     return m
 
@@ -606,10 +688,32 @@ return "ok"
                     try:
                         ss = await session.call_tool("screen_capture", {})
                         if ss.content:
-                            ss_path = Path(run.output_dir) / f"{ev.scenario_name}.png"
-                            # screen_capture returns base64 or image data
-                            # save it if possible
-                            m.screenshot_path = str(ss_path)
+                            # Extract base64 data from the tool result
+                            ss_text = get_tool_text(ss)
+                            # Try to find base64 data in the text
+                            img_data = None
+                            if ss_text:
+                                # The text might be the base64 itself, or contain it
+                                # Strip any prefix like "data:image/png;base64,"
+                                clean = ss_text.strip()
+                                if "," in clean and clean.startswith("data:"):
+                                    clean = clean.split(",", 1)[1]
+                                try:
+                                    img_data = base64.b64decode(clean)
+                                except Exception:
+                                    pass
+                            if img_data is None and hasattr(ss, 'content'):
+                                # Try extracting from content blocks
+                                for c in ss.content:
+                                    if hasattr(c, 'data'):
+                                        img_data = base64.b64decode(c.data)
+                                        break
+                            if img_data is not None:
+                                ss_dir = Path(run.run_dir) / "screenshots"
+                                ss_dir.mkdir(parents=True, exist_ok=True)
+                                ss_path = ss_dir / f"{ev.scenario_name}.png"
+                                ss_path.write_bytes(img_data)
+                                m.screenshot_path = str(ss_path)
                     except Exception:
                         pass
 
@@ -662,7 +766,38 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
             kill_studio(studio_proc)
 
     m.total_time_ms = int((time.time() - t0) * 1000)
+
+    # Categorize error if present
+    if m.error and not m.error_category:
+        m.error_category = categorize_error(m.error)
+
+    # Estimate token cost
+    m.cost_usd = estimate_cost(model.name, m.total_tokens_in, m.total_tokens_out)
+
     return m
+
+
+async def run_single_eval(
+    ev: EvalFile,
+    model: ModelConfig,
+    studio: StudioConfig,
+    run: RunConfig,
+) -> EvalMetrics:
+    """Run a single eval with timeout wrapping."""
+    m = EvalMetrics(scenario=ev.scenario_name, place=ev.place)
+    try:
+        result = await asyncio.wait_for(
+            _run_single_eval_inner(ev, model, studio, run),
+            timeout=run.eval_timeout,
+        )
+        return result
+    except asyncio.TimeoutError:
+        m.error = "Eval timed out"
+        m.error_category = "timeout"
+        m.total_time_ms = run.eval_timeout * 1000
+        m.cost_usd = estimate_cost(model.name, m.total_tokens_in, m.total_tokens_out)
+        logger.error(f"[{ev.scenario_name}] Eval timed out after {run.eval_timeout}s")
+        return m
 
 
 # ──────────────────────────────────────────────
@@ -676,6 +811,14 @@ def aggregate_results(results: list[EvalMetrics], pass_n: int = 1) -> dict:
     tool_errors = sum(r.tool_errors for r in results)
     total_tool_calls = sum(r.tool_calls for r in results)
 
+    # Error breakdown by category
+    error_breakdown = {}
+    for r in results:
+        cat = r.error_category or "none"
+        error_breakdown[cat] = error_breakdown.get(cat, 0) + 1
+
+    total_cost = sum(r.cost_usd for r in results)
+
     summary = {
         "total_evals": total,
         "passed": passed,
@@ -688,6 +831,9 @@ def aggregate_results(results: list[EvalMetrics], pass_n: int = 1) -> dict:
         "avg_latency_ms": round(sum(r.llm_latency_ms for r in results) / total) if total else 0,
         "avg_total_time_ms": round(sum(r.total_time_ms for r in results) / total) if total else 0,
         "total_time_ms": sum(r.total_time_ms for r in results),
+        "token_cost_usd": round(total_cost, 4),
+        "avg_cost_usd": round(total_cost / total, 4) if total else 0,
+        "error_breakdown": error_breakdown,
     }
 
     if pass_n == 5:
@@ -720,6 +866,7 @@ def parse_args():
     p.add_argument("--screenshots", action="store_true", help="Capture screenshots")
     p.add_argument("--verbose", action="store_true", help="Verbose logging")
     p.add_argument("--eval-filter", default=None, help="Regex filter for eval scenario names")
+    p.add_argument("--eval-timeout", type=int, default=300, help="Per-eval timeout in seconds")
     return p.parse_args()
 
 
@@ -767,7 +914,16 @@ async def main():
         output_dir=args.output_dir,
         screenshots=args.screenshots,
         verbose=args.verbose,
+        eval_timeout=args.eval_timeout,
     )
+
+    # Generate run directory
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = f"{args.output_dir}/{run_id}"
+    Path(run_dir).mkdir(parents=True, exist_ok=True)
+    Path(run_dir, "screenshots").mkdir(parents=True, exist_ok=True)
+    run.run_dir = run_dir
+    logger.info(f"Run directory: {run_dir}")
 
     # Parse eval files
     eval_files = sorted(Path(args.evals_dir).glob("*.lua"))
@@ -787,10 +943,44 @@ async def main():
     # Create output dir
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
+    # Save run manifest
+    manifest = {
+        "run_id": run_id,
+        "model": model.name,
+        "config": {
+            "pass_n": run.pass_n,
+            "max_rounds": run.max_tool_rounds,
+            "eval_timeout": run.eval_timeout,
+            "screenshots": run.screenshots,
+        },
+        "start_time": datetime.now().isoformat(),
+    }
+    manifest_path = Path(run_dir) / "run_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
     # Helper: run a set of evals
     async def run_eval_set(evals_list, label):
         results = []
+
+        # Resume capability: check for existing results.json in run_dir
+        completed_names = set()
+        results_json_path = Path(run_dir) / "results.json"
+        if results_json_path.exists():
+            try:
+                existing = json.loads(results_json_path.read_text())
+                for ev_dict in existing.get("evals", []):
+                    completed_names.add(ev_dict.get("scenario", ""))
+                if completed_names:
+                    logger.info(f"Resuming from {run_dir}, skipping {len(completed_names)} completed evals")
+            except Exception:
+                pass
+
         for i, ev in enumerate(evals_list):
+            # Skip already completed evals
+            if ev.scenario_name in completed_names:
+                logger.info(f"=== [{label}] [{i+1}/{len(evals_list)}] {ev.scenario_name} === SKIPPED (already completed)")
+                continue
+
             logger.info(f"=== [{label}] [{i+1}/{len(evals_list)}] {ev.scenario_name} ===")
 
             run_results = []
@@ -799,13 +989,23 @@ async def main():
                 result = await run_single_eval(ev, model, studio, run)
                 run_results.append(result)
 
+                # Retry on transient errors (one retry only)
+                if result.error_category == "transient_error" and not result.retried:
+                    result.retried = True
+                    logger.info("  Transient error, retrying eval...")
+                    retry_result = await run_single_eval(ev, model, studio, run)
+                    retry_result.retried = True
+                    run_results[-1] = retry_result
+                    result = retry_result
+
                 status = "PASS" if result.passed else "FAIL"
                 logger.info(
                     f"  {status} | tokens_in={result.total_tokens_in} "
                     f"tokens_out={result.total_tokens_out} "
                     f"latency={result.llm_latency_ms}ms "
                     f"total={result.total_time_ms}ms "
-                    f"tools={result.tool_calls} err={result.tool_errors}"
+                    f"tools={result.tool_calls} err={result.tool_errors} "
+                    f"cost=${result.cost_usd:.4f} cat={result.error_category}"
                 )
                 if result.error:
                     logger.info(f"  Error: {result.error}")
@@ -838,7 +1038,7 @@ async def main():
             debug_results = await run_eval_set(debug_evals, "DEBUG")
 
     # Save results
-    results_path = Path(args.output_dir) / "results.json"
+    results_path = Path(run_dir) / "results.json"
     summary = aggregate_results(all_results, run.pass_n)
     output = {
         "summary": summary,
@@ -869,9 +1069,16 @@ async def main():
         print(f"    AVG TOKENS: in={summ['avg_tokens_in']} out={summ['avg_tokens_out']}")
         print(f"    AVG LATENCY: {summ['avg_latency_ms']}ms")
         print(f"    TOOL ERROR RATE: {summ['tool_error_rate']}%")
+        print(f"    AVG COST: ${summ['avg_cost_usd']:.4f} per eval, ${summ['token_cost_usd']:.4f} total")
+        # Error breakdown
+        err_bd = summ.get("error_breakdown", {})
+        non_none_errors = {k: v for k, v in err_bd.items() if k != "none"}
+        if non_none_errors:
+            print(f"    ERRORS: {non_none_errors}")
 
     print("\n" + "=" * 60)
     print(f"  MODEL: {model.name}")
+    print(f"  RUN DIR: {run_dir}")
     print_summary("EXPANDED (87 evals)", summary, run.pass_n)
     if debug_summary:
         print_summary("DEBUG (30 evals)", debug_summary, run.pass_n)
