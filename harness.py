@@ -214,37 +214,7 @@ async def llm_chat(
 # ──────────────────────────────────────────────
 
 # Known model pricing (per 1M tokens)
-_MODEL_PRICING = {
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4-turbo": (10.00, 30.00),
-    "gpt-4": (30.00, 60.00),
-    "gpt-3.5-turbo": (0.50, 1.50),
-    "claude-3-opus": (15.00, 75.00),
-    "claude-3-sonnet": (3.00, 15.00),
-    "claude-3-haiku": (0.25, 1.25),
-    "claude-3.5-sonnet": (3.00, 15.00),
-    "claude-sonnet-4": (3.00, 15.00),
-    "claude-opus-4": (15.00, 75.00),
-    "mimo": (0.0, 0.0),  # free tier / included in Ollama Pro
-    "deepseek": (0.14, 0.28),
-    "gemini": (1.25, 10.00),
-}
 
-
-def estimate_cost(model_name: str, tokens_in: int, tokens_out: int) -> float:
-    """Estimate USD cost for a model call based on token counts.
-
-    For known models, uses their published pricing.
-    Default: $1/1M input, $3/1M output (conservative generic estimate).
-    """
-    name_lower = model_name.lower()
-    input_rate, output_rate = 1.0, 3.0  # conservative default
-    for key, (inp, out) in _MODEL_PRICING.items():
-        if key in name_lower:
-            input_rate, output_rate = inp, out
-            break
-    return (tokens_in / 1_000_000 * input_rate) + (tokens_out / 1_000_000 * output_rate)
 
 
 # ──────────────────────────────────────────────
@@ -783,7 +753,7 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
         m.error_category = categorize_error(m.error)
 
     # Estimate token cost
-    m.cost_usd = estimate_cost(model.name, m.total_tokens_in, m.total_tokens_out)
+    m.cost_usd = 0.0  # user calculates cost externally
 
     return m
 
@@ -806,7 +776,7 @@ async def run_single_eval(
         m.error = "Eval timed out"
         m.error_category = "timeout"
         m.total_time_ms = run.eval_timeout * 1000
-        m.cost_usd = estimate_cost(model.name, m.total_tokens_in, m.total_tokens_out)
+        m.cost_usd = 0.0  # user calculates cost externally
         logger.error(f"[{ev.scenario_name}] Eval timed out after {run.eval_timeout}s")
         return m
 
