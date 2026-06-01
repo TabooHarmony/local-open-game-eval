@@ -38,6 +38,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
+def fmt_time(ms: int) -> str:
+    """Format milliseconds as human-readable duration."""
+    if ms < 1000:
+        return f"{ms}ms"
+    s = ms / 1000
+    if s < 60:
+        return f"{s:.1f}s"
+    m = s / 60
+    if m < 60:
+        return f"{m:.1f}m"
+    h = m / 60
+    return f"{h:.1f}h"
+
+
 # ──────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────
@@ -991,8 +1005,8 @@ async def main():
                 logger.info(
                     f"  {status} | tokens_in={result.total_tokens_in} "
                     f"tokens_out={result.total_tokens_out} "
-                    f"latency={result.llm_latency_ms}ms "
-                    f"total={result.total_time_ms}ms "
+                    f"latency={fmt_time(result.llm_latency_ms)} "
+                    f"total={fmt_time(result.total_time_ms)} "
                     f"tools={result.tool_calls} err={result.tool_errors} "
                     f"edits={result.edit_count} ctx={result.max_context_tokens} "
                     f"cat={result.error_category}"
@@ -1058,7 +1072,7 @@ async def main():
             print(f"    PASS RATE: {summ['pass_rate']}% ({summ['passed']}/{summ['total_evals']})")
         print(f"    AVG ROUNDS: {summ['avg_llm_calls']}  AVG TOKENS: in={summ['avg_tokens_in']} out={summ['avg_tokens_out']}")
         print(f"    AVG EDITS: {summ['avg_edit_count']}  AVG PEAK CTX: {summ['avg_max_context_tokens']} tokens")
-        print(f"    AVG LATENCY: {summ['avg_latency_ms']}ms")
+        print(f"    AVG LATENCY: {fmt_time(summ['avg_latency_ms'])}")
         print(f"    TOOL ERROR RATE: {summ['tool_error_rate']}%")
         # Error breakdown
         err_bd = summ.get("error_breakdown", {})
