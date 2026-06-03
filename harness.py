@@ -330,14 +330,20 @@ async def launch_studio(studio: StudioConfig, place_path: str) -> bool:
     """
     abs_place = str(Path(place_path).resolve())
     logger.info(f"Launching Studio with {abs_place}")
+
+    # Restore cookies before launch (in case previous kill corrupted them)
+    restore_cookies()
+
     exe = studio.exe_path
     cmd = f'"{exe}" -localPlaceFile "{abs_place}"'
     task_name = f"HarnessStudio_{int(time.time())}"
 
     # Create scheduled task targeting interactive desktop
+    # NOTE: do NOT use /rl highest — elevation changes the user token context,
+    # which makes WebView2 use a different cookie store (Studio loses auth).
     create = subprocess.run(
         ["schtasks", "/create", "/tn", task_name, "/tr", cmd,
-         "/sc", "once", "/st", "00:00", "/f", "/rl", "highest", "/it"],
+         "/sc", "once", "/st", "00:00", "/f", "/it"],
         capture_output=True, text=True,
     )
     if create.returncode != 0:
@@ -363,13 +369,69 @@ async def launch_studio(studio: StudioConfig, place_path: str) -> bool:
     await asyncio.sleep(studio.startup_wait)
     return True
 
+# WebView2 cookie protection — force-killing Studio can corrupt the SQLite
+# cookie database, causing Studio to lose auth on next launch.
+_COOKIES_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA", r"C:\Users\Admin\AppData\Local"),
+    "Roblox", "RobloxStudio", "WebView2", "EBWebView", "Default", "Network",
+)
+_COOKIES_BACKUP = _COOKIES_DIR + ".bak"
+
+
+def backup_cookies():
+    """Snapshot WebView2 cookies before Studio launch."""
+    import shutil
+    cookies = os.path.join(_COOKIES_DIR, "Cookies")
+    journal = os.path.join(_COOKIES_DIR, "Cookies-journal")
+    if os.path.exists(cookies):
+        shutil.copy2(cookies, _COOKIES_BACKUP)
+        if os.path.exists(journal):
+            shutil.copy2(journal, _COOKIES_BACKUP + "-journal")
+        logger.info("cookies backed up")
+
+
+def restore_cookies():
+    """Restore cookies from backup if current ones are missing/corrupt."""
+    import shutil
+    cookies = os.path.join(_COOKIES_DIR, "Cookies")
+    backup = _COOKIES_BACKUP
+    if os.path.exists(backup) and (not os.path.exists(cookies) or os.path.getsize(cookies) == 0):
+        shutil.copy2(backup, cookies)
+        bj = backup + "-journal"
+        cj = cookies + "-journal"
+        if os.path.exists(bj):
+            shutil.copy2(bj, cj)
+        logger.info("cookies restored from backup")
+    elif os.path.exists(cookies):
+        logger.info("cookies file exists, no restore needed")
+
 
 def kill_studio(_unused=None):
-    """Kill all Studio processes by name."""
+    """Kill all Roblox/Studio processes and wait until they're actually gone.
+
+    Cookie backup/restore (called in launch_studio) handles auth persistence.
+    Must kill StudioMCP and CrashHandler too — they can hold locks on resources.
+    """
+    for proc_name in ("StudioMCP.exe", "RobloxStudioBeta.exe", "RobloxCrashHandler.exe"):
+        subprocess.run(
+            ["taskkill", "/f", "/im", proc_name],
+            capture_output=True, text=True,
+        )
+    # Wait until all Roblox processes are actually dead (max 10s)
+    for _ in range(20):
+        time.sleep(0.5)
+        check = subprocess.run(
+            ["tasklist", "/fi", "imagename eq RobloxStudioBeta.exe", "/nh"],
+            capture_output=True, text=True,
+        )
+        if "RobloxStudioBeta.exe" not in check.stdout:
+            return
+    logger.warning("Studio still alive after 10s of force kills, trying again")
     subprocess.run(
         ["taskkill", "/f", "/im", "RobloxStudioBeta.exe"],
         capture_output=True, text=True,
     )
+    time.sleep(2)
 
 
 # ──────────────────────────────────────────────
@@ -686,8 +748,10 @@ async def _run_single_eval_inner(
             m.total_time_ms = int((time.time() - t0) * 1000)
             return m
         logger.info(f"[{ev.scenario_name}] Studio confirmed running")
+        # Snapshot cookies while Studio is alive (auth is freshly loaded)
+        backup_cookies()
 
-        # 2. Connect MCP
+        # 2. Connect MCP (with timeout on initialize — StudioMCP can hang if Studio isn't ready)
         server_params = StdioServerParameters(
             command="cmd.exe",
             args=["/c", studio.mcp_path],
@@ -695,10 +759,15 @@ async def _run_single_eval_inner(
 
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
-                await session.initialize()
+                try:
+                    await asyncio.wait_for(session.initialize(), timeout=60)
+                except asyncio.TimeoutError:
+                    logger.error(f"[{ev.scenario_name}] MCP initialize timed out after 60s")
+                    m.error = "MCP initialize timed out"
+                    m.error_category = "harness_error"
+                    m.total_time_ms = int((time.time() - t0) * 1000)
+                    return m
                 logger.info(f"[{ev.scenario_name}] MCP connected")
-
-                # 3. Get tool definitions
                 tools_result = await session.list_tools()
                 openai_tools = mcp_tools_to_openai(tools_result.tools)
                 # Append skill_view tool for skills mode
@@ -883,8 +952,7 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
         m.error = f"Fatal: {e}"
         logger.error(f"[{ev.scenario_name}] {e}")
     finally:
-        if studio_proc:
-            kill_studio(studio_proc)
+        kill_studio()
 
     m.total_time_ms = int((time.time() - t0) * 1000)
 
