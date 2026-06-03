@@ -61,7 +61,6 @@ class ModelConfig:
     name: str
     api_base: str
     api_key: str
-    system_prompt: Optional[str] = None
 
 
 @dataclass
@@ -82,6 +81,59 @@ class RunConfig:
     verbose: bool = False
     eval_timeout: int = 300
     run_dir: str = ""
+    skill_loader: Optional["SkillLoader"] = None
+    skills_index: Optional[str] = None
+
+
+# ──────────────────────────────────────────────
+# Skill Loader
+# ──────────────────────────────────────────────
+
+class SkillLoader:
+    """Serves skill content on demand via the skill_view tool."""
+
+    def __init__(self, skills_source: str):
+        self.source = Path(skills_source)
+        self.skills: dict[str, str] = {}
+        self._load()
+
+    def _load(self):
+        for md in sorted(self.source.rglob("SKILL.md")):
+            name = md.parent.name
+            content = md.read_text(encoding="utf-8")
+            # Strip YAML frontmatter
+            if content.startswith("---"):
+                end = content.find("---", 3)
+                if end != -1:
+                    content = content[end + 3:].strip()
+            self.skills[name] = content
+            logger.debug(f"  Loaded skill: {name} ({len(content)} chars)")
+
+    def get_skill(self, name: str) -> str:
+        if name in self.skills:
+            return self.skills[name]
+        available = ", ".join(sorted(self.skills.keys()))
+        return f"Skill '{name}' not found. Available: {available}"
+
+    @staticmethod
+    def tool_definition() -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": "skill_view",
+                "description": "Load a domain knowledge skill by name. Returns rules, code patterns, and anti-patterns for Roblox development.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Skill name, e.g. roblox-building, roblox-physics, roblox-gui",
+                        }
+                    },
+                    "required": ["name"],
+                },
+            },
+        }
 
 
 # ──────────────────────────────────────────────
@@ -145,6 +197,7 @@ class EvalMetrics:
     tools_used: list = field(default_factory=list)  # unique tool names called
     edit_count: int = 0      # multi_edit + script-creating execute_luau calls
     max_context_tokens: int = 0  # peak prompt_tokens in final LLM round
+    skills_used: list = field(default_factory=list)  # skill files injected for this eval
 
 
 # ──────────────────────────────────────────────
@@ -602,6 +655,10 @@ async def _run_single_eval_inner(
                 # 3. Get tool definitions
                 tools_result = await session.list_tools()
                 openai_tools = mcp_tools_to_openai(tools_result.tools)
+                # Append skill_view tool for skills mode
+                if run.skill_loader:
+                    openai_tools.append(SkillLoader.tool_definition())
+                    logger.info(f"[{ev.scenario_name}] skill_view tool appended ({len(run.skill_loader.skills)} skills available)")
                 logger.info(f"[{ev.scenario_name}] {len(openai_tools)} tools available")
 
                 # 4. Ensure LoadedCode exists
@@ -629,8 +686,10 @@ return "ok"
 
                 # 6. Build messages for LLM
                 messages = []
-                if model.system_prompt:
-                    messages.append({"role": "system", "content": model.system_prompt})
+                # Skills mode: use skill index as system prompt
+                if run.skills_index:
+                    messages.append({"role": "system", "content": run.skills_index})
+                    logger.info(f"[{ev.scenario_name}] skill index injected ({len(run.skills_index)} chars)")
                 messages.append({"role": "user", "content": ev.prompt_text})
 
                 # 7. LLM tool-use loop
@@ -670,13 +729,20 @@ return "ok"
                                 code = args.get("code", "")
                                 if "Instance.new" in code or ".Source" in code or "multi_edit" in code:
                                     m.edit_count += 1
-
-                            try:
-                                result = await session.call_tool(func["name"], args)
-                                tool_out = get_tool_text(result)
-                            except Exception as e:
-                                tool_out = f"Tool error: {e}"
-                                m.tool_errors += 1
+                            # Handle skill_view locally (not an MCP tool)
+                            if tool_name == "skill_view" and run.skill_loader:
+                                skill_name = args.get("name", "")
+                                tool_out = run.skill_loader.get_skill(skill_name)
+                                logger.info(f"[{ev.scenario_name}] skill_view({skill_name}) -> {len(tool_out)} chars")
+                                if skill_name not in m.skills_used:
+                                    m.skills_used.append(skill_name)
+                            else:
+                                try:
+                                    result = await session.call_tool(func["name"], args)
+                                    tool_out = get_tool_text(result)
+                                except Exception as e:
+                                    tool_out = f"Tool error: {e}"
+                                    m.tool_errors += 1
 
                             messages.append({
                                 "role": "tool",
@@ -861,7 +927,8 @@ def parse_args():
     p.add_argument("--model-name", required=True, help="Model name for API")
     p.add_argument("--api-base", default=None, help="OpenAI-compatible API base URL (or set LLM_API_BASE env)")
     p.add_argument("--api-key", default=None, help="API key (or set LLM_API_KEY env)")
-    p.add_argument("--system-prompt-file", default=None, help="File with system prompt for skills injection")
+    p.add_argument("--skills-dir", default=None, help="Path to skills source dir for skills mode (default: roblox-brain/skills)")
+    p.add_argument("--skills", action="store_true", help="--skills mode: model gets skill index + skill_view tool, loads skills itself")
     p.add_argument("--pass-n", type=int, default=1, choices=[1, 5], help="Pass@1 or Pass@5")
     p.add_argument("--max-rounds", type=int, default=25, help="Max LLM tool-use rounds per eval")
     p.add_argument("--startup-wait", type=int, default=20, help="Seconds to wait for Studio")
@@ -892,17 +959,23 @@ async def main():
         print("Error: --api-key or LLM_API_KEY env required")
         sys.exit(1)
 
-    # Load system prompt
-    system_prompt = None
-    if args.system_prompt_file:
-        system_prompt = Path(args.system_prompt_file).read_text(encoding="utf-8")
-        logger.info(f"Loaded system prompt ({len(system_prompt)} chars)")
+    # Load skills mode
+    skill_loader = None
+    skills_index = None
+    if args.skills:
+        skills_source = args.skills_dir or str(Path(__file__).parent.parent / "roblox-brain" / "skills")
+        skill_loader = SkillLoader(skills_source)
+        logger.info(f"Loaded skill loader ({len(skill_loader.skills)} skills from {skills_source})")
+        index_path = Path(__file__).parent / "skills_index.txt"
+        if index_path.exists():
+            skills_index = index_path.read_text(encoding="utf-8")
+        else:
+            logger.warning(f"skills_index.txt not found at {index_path}")
 
     model = ModelConfig(
         name=args.model_name,
         api_base=api_base.rstrip("/"),
         api_key=api_key,
-        system_prompt=system_prompt,
     )
     studio = StudioConfig(
         exe_path=args.studio_exe,
@@ -918,10 +991,13 @@ async def main():
         screenshots=args.screenshots,
         verbose=args.verbose,
         eval_timeout=args.eval_timeout,
+        skill_loader=skill_loader,
+        skills_index=skills_index,
     )
 
-    # Generate run directory
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Generate run directory: {mode}_{date}_{time}
+    mode = "skills" if skill_loader else "vanilla"
+    run_id = f"{mode}_{datetime.now().strftime('%m%d_%H%M')}"
     run_dir = f"{args.output_dir}/{run_id}"
     Path(run_dir).mkdir(parents=True, exist_ok=True)
     Path(run_dir, "screenshots").mkdir(parents=True, exist_ok=True)
@@ -958,6 +1034,11 @@ async def main():
         },
         "start_time": datetime.now().isoformat(),
     }
+    if skill_loader:
+        manifest["skills_mode"] = "skills"
+        manifest["skills_source"] = str(skill_loader.source)
+    else:
+        manifest["skills_mode"] = "vanilla"
     manifest_path = Path(run_dir) / "run_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
@@ -1002,6 +1083,7 @@ async def main():
                     result = retry_result
 
                 status = "PASS" if result.passed else "FAIL"
+                skills_tag = f" skills={result.skills_used}" if result.skills_used else ""
                 logger.info(
                     f"  {status} | tokens_in={result.total_tokens_in} "
                     f"tokens_out={result.total_tokens_out} "
@@ -1009,7 +1091,7 @@ async def main():
                     f"total={fmt_time(result.total_time_ms)} "
                     f"tools={result.tool_calls} err={result.tool_errors} "
                     f"edits={result.edit_count} ctx={result.max_context_tokens} "
-                    f"cat={result.error_category}"
+                    f"cat={result.error_category}{skills_tag}"
                 )
                 if result.error:
                     logger.info(f"  Error: {result.error}")
