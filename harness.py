@@ -321,25 +321,55 @@ def categorize_error(error_text: str) -> str:
 # Studio Lifecycle
 # ──────────────────────────────────────────────
 
-async def launch_studio(studio: StudioConfig, place_path: str) -> subprocess.Popen:
+async def launch_studio(studio: StudioConfig, place_path: str) -> bool:
+    """Launch Studio on the interactive desktop via schtasks.
+
+    SSH sessions run in Windows Session 0 (non-interactive). subprocess.Popen
+    from SSH creates GUI processes that never render. schtasks /it forces the
+    process onto the logged-on user's interactive desktop.
+    """
     abs_place = str(Path(place_path).resolve())
     logger.info(f"Launching Studio with {abs_place}")
-    proc = subprocess.Popen(
-        [studio.exe_path, "-localPlaceFile", abs_place],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    exe = studio.exe_path
+    cmd = f'"{exe}" -localPlaceFile "{abs_place}"'
+    task_name = f"HarnessStudio_{int(time.time())}"
+
+    # Create scheduled task targeting interactive desktop
+    create = subprocess.run(
+        ["schtasks", "/create", "/tn", task_name, "/tr", cmd,
+         "/sc", "once", "/st", "00:00", "/f", "/rl", "highest", "/it"],
+        capture_output=True, text=True,
     )
+    if create.returncode != 0:
+        logger.error(f"schtasks create failed: {create.stderr.strip()}")
+        return False
+
+    # Run it immediately
+    run = subprocess.run(
+        ["schtasks", "/run", "/tn", task_name],
+        capture_output=True, text=True,
+    )
+    if run.returncode != 0:
+        logger.error(f"schtasks run failed: {run.stderr.strip()}")
+        return False
+
+    # Clean up the task definition (the process keeps running)
+    subprocess.run(
+        ["schtasks", "/delete", "/tn", task_name, "/f"],
+        capture_output=True, text=True,
+    )
+
     logger.info(f"Waiting {studio.startup_wait}s for Studio to load...")
     await asyncio.sleep(studio.startup_wait)
-    return proc
+    return True
 
 
-def kill_studio(proc: subprocess.Popen):
-    try:
-        proc.terminate()
-        proc.wait(timeout=10)
-    except Exception:
-        proc.kill()
+def kill_studio(_unused=None):
+    """Kill all Studio processes by name."""
+    subprocess.run(
+        ["taskkill", "/f", "/im", "RobloxStudioBeta.exe"],
+        capture_output=True, text=True,
+    )
 
 
 # ──────────────────────────────────────────────
@@ -638,8 +668,24 @@ async def _run_single_eval_inner(
 
     studio_proc = None
     try:
-        # 1. Launch Studio
-        studio_proc = await launch_studio(studio, str(place_path))
+        # 1. Launch Studio on interactive desktop
+        if not await launch_studio(studio, str(place_path)):
+            m.error = "Failed to launch Studio (schtasks error)"
+            m.error_category = "harness_error"
+            m.total_time_ms = int((time.time() - t0) * 1000)
+            return m
+
+        # 1b. Verify Studio is actually running
+        check = subprocess.run(
+            ["tasklist", "/fi", "imagename eq RobloxStudioBeta.exe", "/nh"],
+            capture_output=True, text=True,
+        )
+        if "RobloxStudioBeta.exe" not in check.stdout:
+            m.error = "Studio process not found after launch"
+            m.error_category = "harness_error"
+            m.total_time_ms = int((time.time() - t0) * 1000)
+            return m
+        logger.info(f"[{ev.scenario_name}] Studio confirmed running")
 
         # 2. Connect MCP
         server_params = StdioServerParameters(
