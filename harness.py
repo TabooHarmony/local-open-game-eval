@@ -770,6 +770,10 @@ async def _run_single_eval_inner(
                 logger.info(f"[{ev.scenario_name}] MCP connected")
                 tools_result = await session.list_tools()
                 openai_tools = mcp_tools_to_openai(tools_result.tools)
+                # Exclude vision-only tools (screen_capture returns base64 images that
+                # non-vision models cannot interpret, wasting massive context tokens)
+                _EXCLUDED_TOOLS = {"screen_capture"}
+                openai_tools = [t for t in openai_tools if t["function"]["name"] not in _EXCLUDED_TOOLS]
                 # Append skill_view tool for skills mode
                 if run.skill_loader:
                     openai_tools.append(SkillLoader.tool_definition())
