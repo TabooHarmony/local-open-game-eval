@@ -25,6 +25,12 @@ import argparse
 import logging
 from datetime import datetime
 from pathlib import Path
+
+# Auto-route skills based on eval prompt content
+try:
+    from skill_router import SkillRouter
+except ImportError:
+    SkillRouter = None
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -82,6 +88,7 @@ class RunConfig:
     eval_timeout: int = 300
     run_dir: str = ""
     skill_loader: Optional["SkillLoader"] = None
+    skill_router: Optional["SkillRouter"] = None
     skills_index: Optional[str] = None
 
 
@@ -808,6 +815,18 @@ return "ok"
                 # Skills mode: use skill index as system prompt
                 if run.skills_index:
                     messages.append({"role": "system", "content": run.skills_index})
+
+                # Auto-route relevant skills based on eval prompt content
+                if run.skill_router is not None:
+                    routed_skills = run.skill_router.route(ev.prompt_text, top_n=2)
+                    if routed_skills:
+                        for skill_name in routed_skills:
+                            skill_content = run.skill_router.get_skill_content(skill_name)
+                            if skill_content:
+                                # Truncate to prevent context bloat (max 3K chars per skill)
+                                truncated = skill_content[:3000]
+                                messages.append({"role": "system", "content": f'## Relevant Skill: {skill_name}\n\n{truncated}'})
+                                logger.info(f"[{ev.scenario_name}] auto-routed skill: {skill_name} ({len(skill_content)} chars)")
                     logger.info(f"[{ev.scenario_name}] skill index injected ({len(run.skills_index)} chars)")
                 messages.append({"role": "user", "content": ev.prompt_text})
 
@@ -1084,6 +1103,13 @@ async def main():
         skills_source = args.skills_dir or str(Path(__file__).parent.parent / "roblox-brain" / "skills")
         skill_loader = SkillLoader(skills_source)
         logger.info(f"Loaded skill loader ({len(skill_loader.skills)} skills from {skills_source})")
+        skill_router = None
+        if SkillRouter is not None:
+            try:
+                skill_router = SkillRouter(skills_source)
+                logger.info(f'Loaded skill router ({len(skill_router.skills)} skills)')
+            except Exception as e:
+                logger.warning(f'Skill router failed to load: {e}')
         index_path = Path(__file__).parent / "skills_index.txt"
         if index_path.exists():
             skills_index = index_path.read_text(encoding="utf-8")
@@ -1110,6 +1136,7 @@ async def main():
         verbose=args.verbose,
         eval_timeout=args.eval_timeout,
         skill_loader=skill_loader,
+            skill_router=skill_router,
         skills_index=skills_index,
     )
 
