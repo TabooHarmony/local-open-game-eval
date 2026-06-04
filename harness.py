@@ -479,6 +479,11 @@ if not LoadedCode then
     LoadedCode.Parent = game
 end
 
+-- Enable loadstring for game scripts (identity 2)
+pcall(function()
+    game:GetService("ServerScriptService").LoadStringEnabled = true
+end)
+
 local eu = LoadedCode:FindFirstChild("EvalUtils")
 if not eu then
     eu = Instance.new("Folder")
@@ -790,11 +795,14 @@ async def _run_single_eval_inner(
                 # 4. Ensure LoadedCode exists
                 await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
 
-                # 5. Run eval setup
+                # 5. Run eval setup (via ModuleScript — loadstring unavailable at plugin identity)
                 setup_lua = f"""
-local ok, eval = pcall(function()
-    return loadstring([==[{ev.script}]==])()
-end)
+local evalMod = Instance.new("ModuleScript")
+evalMod.Name = "_HarnessEvalSetup"
+evalMod.Source = [==[{ev.script}]==]
+evalMod.Parent = game
+local ok, eval = pcall(require, evalMod)
+evalMod:Destroy()
 if not ok then return "SETUP_ERROR: " .. tostring(eval) end
 if eval.setup then
     local sok, serr = pcall(eval.setup)
@@ -830,10 +838,9 @@ return "ok"
                     logger.info(f"[{ev.scenario_name}] skill index injected ({len(run.skills_index)} chars)")
                 # Luau constraints system prompt
                 LUAU_SYSTEM_PROMPT = (
-                    "IMPORTANT: You are writing Luau for Roblox, NOT standard Lua. "
-                    "Roblox Luau does NOT have loadstring(), require(), or debug.getinfo(). "
-                    "Never use loadstring() — write code inline instead. "
-                    "Use direct variable assignments and function definitions, not dynamic code evaluation."
+                    "You are writing Luau for Roblox Studio. "
+                    "loadstring() is available in this environment. "
+                    "Use require() with ModuleScripts for modular code."
                 )
                 messages.append({"role": "system", "content": LUAU_SYSTEM_PROMPT})
                 messages.append({"role": "user", "content": ev.prompt_text})
@@ -957,11 +964,14 @@ return "ok"
                 # 9. Re-inject LoadedCode + EvalUtils (LLM may have wiped them)
                 await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
 
-                # 10. Run check_scene (edit mode)
+                # 10. Run check_scene (edit mode) via ModuleScript
                 check_scene_lua = f"""
-local ok, eval = pcall(function()
-    return loadstring([==[{ev.script}]==])()
-end)
+local evalMod = Instance.new("ModuleScript")
+evalMod.Name = "_HarnessEvalCheck"
+evalMod.Source = [==[{ev.script}]==]
+evalMod.Parent = game
+local ok, eval = pcall(require, evalMod)
+evalMod:Destroy()
 if not ok then return "false|PARSE_ERROR: " .. tostring(eval) end
 if not eval.check_scene then return "true|NO_CHECK" end
 local cok, cerr = pcall(eval.check_scene)
