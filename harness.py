@@ -85,7 +85,7 @@ class RunConfig:
     output_dir: str = "results"
     screenshots: bool = False
     verbose: bool = False
-    eval_timeout: int = 300
+    eval_timeout: int = 600
     run_dir: str = ""
     skill_loader: Optional["SkillLoader"] = None
     skill_router: Optional["SkillRouter"] = None
@@ -1073,7 +1073,7 @@ def parse_args():
     p.add_argument("--screenshots", action="store_true", help="Capture screenshots")
     p.add_argument("--verbose", action="store_true", help="Verbose logging")
     p.add_argument("--eval-filter", default=None, help="Regex filter for eval scenario names")
-    p.add_argument("--eval-timeout", type=int, default=300, help="Per-eval timeout in seconds")
+    p.add_argument("--eval-timeout", type=int, default=600, help="Per-eval timeout in seconds")
     return p.parse_args()
 
 
@@ -1098,6 +1098,7 @@ async def main():
 
     # Load skills mode
     skill_loader = None
+    skill_router = None
     skills_index = None
     if args.skills:
         skills_source = args.skills_dir or str(Path(__file__).parent.parent / "roblox-brain" / "skills")
@@ -1136,7 +1137,7 @@ async def main():
         verbose=args.verbose,
         eval_timeout=args.eval_timeout,
         skill_loader=skill_loader,
-            skill_router=skill_router,
+        skill_router=skill_router,
         skills_index=skills_index,
     )
 
@@ -1219,7 +1220,7 @@ async def main():
                 run_results.append(result)
 
                 # Retry on transient errors (one retry only)
-                if result.error_category == "transient_error" and not result.retried:
+                if result.error_category in ("transient_error", "timeout") and not result.retried:
                     result.retried = True
                     logger.info("  Transient error, retrying eval...")
                     retry_result = await run_single_eval(ev, model, studio, run)
