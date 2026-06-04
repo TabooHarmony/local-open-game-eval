@@ -828,14 +828,38 @@ return "ok"
                                 messages.append({"role": "system", "content": f'## Relevant Skill: {skill_name}\n\n{truncated}'})
                                 logger.info(f"[{ev.scenario_name}] auto-routed skill: {skill_name} ({len(skill_content)} chars)")
                     logger.info(f"[{ev.scenario_name}] skill index injected ({len(run.skills_index)} chars)")
+                # Luau constraints system prompt
+                LUAU_SYSTEM_PROMPT = (
+                    "IMPORTANT: You are writing Luau for Roblox, NOT standard Lua. "
+                    "Roblox Luau does NOT have loadstring(), require(), or debug.getinfo(). "
+                    "Never use loadstring() — write code inline instead. "
+                    "Use direct variable assignments and function definitions, not dynamic code evaluation."
+                )
+                messages.append({"role": "system", "content": LUAU_SYSTEM_PROMPT})
                 messages.append({"role": "user", "content": ev.prompt_text})
 
                 # 7. LLM tool-use loop
                 llm_start = time.time()
                 round_idx = 0
+                LLM_CALL_TIMEOUT = 90  # per-call timeout (seconds)
+                LLM_CALL_RETRIES = 2   # retries on per-call timeout
                 for round_idx in range(run.max_tool_rounds):
                     logger.info(f"[{ev.scenario_name}] LLM round {round_idx + 1}")
-                    response = await llm_chat(model, messages, openai_tools)
+                    # Per-call timeout with retry (separate from eval timeout)
+                    response = None
+                    for call_attempt in range(LLM_CALL_RETRIES + 1):
+                        try:
+                            response = await asyncio.wait_for(
+                                llm_chat(model, messages, openai_tools),
+                                timeout=LLM_CALL_TIMEOUT,
+                            )
+                            break
+                        except asyncio.TimeoutError:
+                            if call_attempt < LLM_CALL_RETRIES:
+                                logger.warning(f"[{ev.scenario_name}] LLM call timed out after {LLM_CALL_TIMEOUT}s (attempt {call_attempt+1}/{LLM_CALL_RETRIES+1}), retrying...")
+                            else:
+                                logger.error(f"[{ev.scenario_name}] LLM call timed out after {LLM_CALL_RETRIES+1} attempts of {LLM_CALL_TIMEOUT}s each")
+                                raise
                     m.llm_calls += 1
 
                     usage = response.get("usage", {})
