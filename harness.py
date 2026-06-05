@@ -661,8 +661,9 @@ end
     # 2b. Ensure Studio is in edit mode (not stuck in play from a previous LLM round)
     try:
         await session.call_tool("start_stop_play", {"is_start": False})
-    except Exception:
-        pass
+        await asyncio.sleep(2)  # let Studio settle out of play mode
+    except Exception as e:
+        logger.debug(f"  pre-stop play mode failed (non-fatal): {e}")
 
     # 3. Use StudioTestService:ExecutePlayModeAsync to start play mode
     #    This blocks until the server script calls EndTest()
@@ -1263,8 +1264,12 @@ async def main():
                 result = await run_single_eval(ev, model, studio, run)
                 run_results.append(result)
 
-                # Retry on transient errors (one retry only)
-                if result.error_category in ("transient_error", "timeout") and not result.retried:
+                # Retry on transient errors or eval-level timeouts (one retry only).
+                # Don't retry check_game timeouts — those are model limitations, not transient.
+                should_retry = result.error_category == "transient_error"
+                if result.error_category == "timeout" and not (result.error and "check_game" in result.error):
+                    should_retry = True
+                if should_retry and not result.retried:
                     result.retried = True
                     logger.info("  Transient error, retrying eval...")
                     retry_result = await run_single_eval(ev, model, studio, run)
