@@ -58,9 +58,9 @@ def fmt_time(ms: int) -> str:
     return f"{h:.1f}h"
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Config
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 @dataclass
 class ModelConfig:
@@ -92,9 +92,9 @@ class RunConfig:
     skills_index: Optional[str] = None
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Skill Loader
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 class SkillLoader:
     """Serves skill content on demand via the skill_view tool."""
@@ -143,9 +143,9 @@ class SkillLoader:
         }
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Eval Parser
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 @dataclass
 class EvalFile:
@@ -176,9 +176,9 @@ def parse_eval(path: str) -> EvalFile:
     )
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Metrics
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 @dataclass
 class EvalMetrics:
@@ -207,9 +207,9 @@ class EvalMetrics:
     skills_used: list = field(default_factory=list)  # skill files injected for this eval
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # LLM Bridge
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 def mcp_tools_to_openai(tools) -> list:
     """Convert MCP tool definitions to OpenAI function calling format."""
@@ -285,17 +285,17 @@ async def llm_chat(
     raise last_error or RuntimeError("LLM call failed after all retries")
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Token Cost Estimation
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 # Known model pricing (per 1M tokens)
 
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Error Categorization
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 def categorize_error(error_text: str) -> str:
     """Categorize an error message into a standard category.
@@ -324,9 +324,9 @@ def categorize_error(error_text: str) -> str:
     return "harness_error"
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Studio Lifecycle
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 async def launch_studio(studio: StudioConfig, place_path: str) -> bool:
     """Launch Studio on the interactive desktop via schtasks.
@@ -346,7 +346,7 @@ async def launch_studio(studio: StudioConfig, place_path: str) -> bool:
     task_name = f"HarnessStudio_{int(time.time())}"
 
     # Create scheduled task targeting interactive desktop
-    # NOTE: do NOT use /rl highest — elevation changes the user token context,
+    # NOTE: do NOT use /rl highest �?" elevation changes the user token context,
     # which makes WebView2 use a different cookie store (Studio loses auth).
     create = subprocess.run(
         ["schtasks", "/create", "/tn", task_name, "/tr", cmd,
@@ -376,7 +376,7 @@ async def launch_studio(studio: StudioConfig, place_path: str) -> bool:
     await asyncio.sleep(studio.startup_wait)
     return True
 
-# WebView2 cookie protection — force-killing Studio can corrupt the SQLite
+# WebView2 cookie protection �?" force-killing Studio can corrupt the SQLite
 # cookie database, causing Studio to lose auth on next launch.
 _COOKIES_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA", r"C:\Users\Admin\AppData\Local"),
@@ -417,7 +417,7 @@ def kill_studio(_unused=None):
     """Kill all Roblox/Studio processes and wait until they're actually gone.
 
     Cookie backup/restore (called in launch_studio) handles auth persistence.
-    Must kill StudioMCP and CrashHandler too — they can hold locks on resources.
+    Must kill StudioMCP and CrashHandler too �?" they can hold locks on resources.
     """
     for proc_name in ("StudioMCP.exe", "RobloxStudioBeta.exe", "RobloxCrashHandler.exe"):
         subprocess.run(
@@ -441,9 +441,9 @@ def kill_studio(_unused=None):
     time.sleep(2)
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Eval Runner
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 # EvalUtils module implementations (reverse-engineered from eval script usage)
 # Loaded from evalutils/ directory at startup
@@ -530,7 +530,7 @@ print("[bridge] script started")
 task.wait(2)  -- brief settle instead of blocking game.Loaded:Wait()
 print("[bridge] after settle")
 
--- Wait for player — try multiple methods
+-- Wait for player �?" try multiple methods
 local player = nil
 if #Players:GetPlayers() > 0 then
     player = Players:GetPlayers()[1]
@@ -658,6 +658,12 @@ end
         logger.warning(f"  Failed to create bridge script: {bridge_status}")
         return None
 
+    # 2b. Ensure Studio is in edit mode (not stuck in play from a previous LLM round)
+    try:
+        await session.call_tool("start_stop_play", {"is_start": False})
+    except Exception:
+        pass
+
     # 3. Use StudioTestService:ExecutePlayModeAsync to start play mode
     #    This blocks until the server script calls EndTest()
     run_lua = f"""
@@ -763,7 +769,7 @@ async def _run_single_eval_inner(
         # Snapshot cookies while Studio is alive (auth is freshly loaded)
         backup_cookies()
 
-        # 2. Connect MCP (with timeout on initialize — StudioMCP can hang if Studio isn't ready)
+        # 2. Connect MCP (with timeout on initialize �?" StudioMCP can hang if Studio isn't ready)
         server_params = StdioServerParameters(
             command="cmd.exe",
             args=["/c", studio.mcp_path],
@@ -795,7 +801,7 @@ async def _run_single_eval_inner(
                 # 4. Ensure LoadedCode exists
                 await session.call_tool("execute_luau", {"code": ENSURE_LOADED_CODE})
 
-                # 5. Run eval setup (via ModuleScript — loadstring unavailable at plugin identity)
+                # 5. Run eval setup (via ModuleScript �?" loadstring unavailable at plugin identity)
                 setup_lua = f"""
 local evalMod = Instance.new("ModuleScript")
 evalMod.Name = "_HarnessEvalSetup"
@@ -1006,8 +1012,12 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
                 m.passed = (m.scene_passed is True) and (m.game_passed is not False)
 
     except Exception as e:
-        m.error = f"Fatal: {e}"
-        logger.error(f"[{ev.scenario_name}] {e}")
+        # Unwrap ExceptionGroup / TaskGroup to get the actual sub-exception
+        err_msg = str(e)
+        if hasattr(e, 'exceptions') and e.exceptions:
+            err_msg = str(e.exceptions[0])
+        m.error = f"Fatal: {err_msg}"
+        logger.error(f"[{ev.scenario_name}] {err_msg}")
     finally:
         kill_studio()
 
@@ -1042,9 +1052,9 @@ async def run_single_eval(
         return m
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # Aggregation
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 def aggregate_results(results: list[EvalMetrics], pass_n: int = 1) -> dict:
     total = len(results)
@@ -1084,9 +1094,9 @@ def aggregate_results(results: list[EvalMetrics], pass_n: int = 1) -> dict:
     return summary
 
 
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 # CLI
-# ──────────────────────────────────────────────
+# �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
 def parse_args():
     p = argparse.ArgumentParser(description="OpenGameEval Local Harness")
@@ -1353,3 +1363,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
