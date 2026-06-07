@@ -386,15 +386,22 @@ _COOKIES_BACKUP = _COOKIES_DIR + ".bak"
 
 
 def backup_cookies():
-    """Snapshot WebView2 cookies before Studio launch."""
+    """Snapshot WebView2 cookies before Studio launch.
+
+    Best-effort: Studio may hold an exclusive lock on the SQLite database,
+    causing WinError 32. In that case we skip the backup and continue.
+    """
     import shutil
     cookies = os.path.join(_COOKIES_DIR, "Cookies")
     journal = os.path.join(_COOKIES_DIR, "Cookies-journal")
     if os.path.exists(cookies):
-        shutil.copy2(cookies, _COOKIES_BACKUP)
-        if os.path.exists(journal):
-            shutil.copy2(journal, _COOKIES_BACKUP + "-journal")
-        logger.info("cookies backed up")
+        try:
+            shutil.copy2(cookies, _COOKIES_BACKUP)
+            if os.path.exists(journal):
+                shutil.copy2(journal, _COOKIES_BACKUP + "-journal")
+            logger.info("cookies backed up")
+        except OSError as e:
+            logger.debug(f"cookies backup skipped (file locked): {e}")
 
 
 def restore_cookies():
