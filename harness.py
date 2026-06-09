@@ -694,6 +694,19 @@ end
         result = get_tool_text(r) or "false|no_response"
     except asyncio.TimeoutError:
         logger.warning(f"  StudioTestService timed out after {timeout}s")
+        # Diagnose: check if bridge script exists and is running
+        try:
+            diag = await session.call_tool("execute_luau", {"code": """
+local s = game:GetService("ServerScriptService"):FindFirstChild("_HarnessBridge")
+if s then
+    return "bridge_exists|disabled=" .. tostring(s.Disabled) .. "|runcontext=" .. tostring(s.RunContext)
+else
+    return "bridge_missing"
+end
+"""})
+            logger.info(f"  bridge diagnostic: {get_tool_text(diag)}")
+        except Exception as e:
+            logger.info(f"  bridge diagnostic failed: {e}")
         # Force stop play mode
         try:
             await session.call_tool("start_stop_play", {"is_start": False})
