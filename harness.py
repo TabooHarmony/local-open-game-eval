@@ -1019,11 +1019,17 @@ if cok then return "true|pass" else return "false|" .. tostring(cerr) end
 
                 m.passed = (m.scene_passed is True) and (m.game_passed is not False)
 
+    except asyncio.TimeoutError:
+        m.error = f"Eval timed out after {run.eval_timeout}s"
+        m.error_category = "timeout"
+        logger.error(f"[{ev.scenario_name}] Eval timed out after {run.eval_timeout}s")
     except Exception as e:
         # Unwrap ExceptionGroup / TaskGroup to get the actual sub-exception
         err_msg = str(e)
         if hasattr(e, 'exceptions') and e.exceptions:
             err_msg = str(e.exceptions[0])
+        if not err_msg:
+            err_msg = type(e).__name__
         m.error = f"Fatal: {err_msg}"
         logger.error(f"[{ev.scenario_name}] {err_msg}")
     finally:
