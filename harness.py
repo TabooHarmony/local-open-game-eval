@@ -636,6 +636,17 @@ async def run_check_game_sts(session, ev: EvalFile, timeout: float = 120.0) -> O
     """
     eval_code = ev.script
 
+    # 0. Ensure Studio is in edit mode BEFORE creating anything.
+    #    If the model called start_stop_play during the eval, the play DataModel
+    #    is active. Creating the bridge here then stopping play would discard it
+    #    (play DataModel is destroyed on stop). We must be in edit mode first so
+    #    the bridge lives in the edit DataModel that ExecutePlayModeAsync clones.
+    try:
+        await session.call_tool("start_stop_play", {"is_start": False})
+        await asyncio.sleep(2)  # let Studio settle out of play mode
+    except Exception as e:
+        logger.debug(f"  pre-stop play mode failed (non-fatal): {e}")
+
     # 1. Store eval code as ModuleScript in ReplicatedStorage
     store_lua = f"""
 local existing = game:GetService("ReplicatedStorage"):FindFirstChild("_HarnessEvalCode")
@@ -675,13 +686,6 @@ end
     if "ok" not in bridge_status:
         logger.warning(f"  Failed to create bridge script: {bridge_status}")
         return None
-
-    # 2b. Ensure Studio is in edit mode (not stuck in play from a previous LLM round)
-    try:
-        await session.call_tool("start_stop_play", {"is_start": False})
-        await asyncio.sleep(2)  # let Studio settle out of play mode
-    except Exception as e:
-        logger.debug(f"  pre-stop play mode failed (non-fatal): {e}")
 
     # 3. Use StudioTestService:ExecutePlayModeAsync to start play mode
     #    This blocks until the server script calls EndTest()
