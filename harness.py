@@ -521,6 +521,8 @@ ENSURE_LOADED_CODE = _build_evalutils_inject_lua()
 # It loads eval code from ReplicatedStorage, runs check_game, and returns the result
 # via StudioTestService:EndTest().
 BRIDGE_SCRIPT_LUA = r"""
+-- Wrap entire bridge in pcall for error reporting
+local bridgeOk, bridgeErr = pcall(function()
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local STS = game:GetService("StudioTestService")
@@ -610,6 +612,15 @@ if cok then
 else
     print("[bridge] check_game FAILED: " .. tostring(cerr))
     STS:EndTest("false|" .. tostring(cerr))
+end
+end)  -- end of pcall
+
+-- If the bridge errored and EndTest was never called, report the error
+if not bridgeOk then
+    print("[bridge] FATAL ERROR: " .. tostring(bridgeErr))
+    pcall(function()
+        game:GetService("StudioTestService"):EndTest("false|BRIDGE_ERROR: " .. tostring(bridgeErr))
+    end)
 end
 """
 
